@@ -683,11 +683,31 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     func updatePlannedRange(at index: Int, to range: ClipRange) {
         guard plannedRanges.indices.contains(index), let durationSeconds else { return }
-        plannedRanges[index] = ClipRangeEditor.updatedRange(
+        var updated = ClipRangeEditor.updatedRange(
             range,
             totalDuration: durationSeconds,
             frameDuration: frameDurationSeconds
         )
+        // Prevent overlap with neighbors. Clamp the moved range so its
+        // start doesn't cross the previous range's end, and its end
+        // doesn't cross the next range's start. Keeps every range
+        // independently selectable — without this, two overlapping
+        // ranges stack their handle hit-zones on top of each other and
+        // the later-rendered one swallows all taps.
+        if index > 0 {
+            let prevEnd = plannedRanges[index - 1].endSeconds
+            updated = ClipRange(startSeconds: max(updated.startSeconds, prevEnd),
+                                endSeconds: updated.endSeconds)
+        }
+        if index < plannedRanges.count - 1 {
+            let nextStart = plannedRanges[index + 1].startSeconds
+            updated = ClipRange(startSeconds: updated.startSeconds,
+                                endSeconds: min(updated.endSeconds, nextStart))
+        }
+        // If clamping collapsed the range below minimum, skip the update
+        // rather than emit an invalid range.
+        guard updated.endSeconds - updated.startSeconds >= 0.05 else { return }
+        plannedRanges[index] = updated
         clips = []
         statusMessage = "Review adjusted clip ranges."
         persistCurrentProject()
@@ -824,6 +844,15 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             totalDuration: total,
             frameDuration: frameDurationSeconds
         )
+        // Reject the add if it overlaps an existing planned range —
+        // overlapping ranges stack their handle hit-zones on top of each
+        // other and one becomes unselectable.
+        for existing in plannedRanges {
+            if snapped.startSeconds < existing.endSeconds && snapped.endSeconds > existing.startSeconds {
+                statusMessage = "That overlaps an existing clip — move the highlight to an empty part."
+                return
+            }
+        }
         plannedRanges.append(snapped)
         clips = []
         let nextStart = snapped.endSeconds
