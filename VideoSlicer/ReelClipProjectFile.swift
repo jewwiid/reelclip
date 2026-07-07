@@ -58,7 +58,7 @@ struct ReelClipProjectFile: Codable {
     var frameDurationSeconds: Double
     var cutModeRaw: String
     var segmentLengthText: String
-    var editPrompt: String
+
     var plannedRanges: [ClipRange]
     var exportedClips: [ReelClipStoredClip]
     var scrubPositionSeconds: Double
@@ -117,7 +117,7 @@ extension ReelClipProjectFile {
         self.frameDurationSeconds = project.frameDurationSeconds
         self.cutModeRaw = project.cutMode.rawValue
         self.segmentLengthText = project.segmentLengthText
-        self.editPrompt = project.editPrompt
+
         self.plannedRanges = project.plannedRanges
         self.exportedClips = project.exportedClips.map(ReelClipStoredClip.init)
         self.scrubPositionSeconds = project.scrubPositionSeconds
@@ -152,11 +152,9 @@ extension ReelClipProjectFile {
             frameDurationSeconds: frameDurationSeconds,
             cutMode: resolvedCutMode,
             segmentLengthText: segmentLengthText,
-            editPrompt: editPrompt,
             plannedRanges: plannedRanges,
             exportedClips: exportedClips.map { $0.toStoredClip() },
             scrubPositionSeconds: scrubPositionSeconds,
-            transcript: nil,
             createdAt: createdAt,
             updatedAt: updatedAt
         )

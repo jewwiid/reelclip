@@ -1,5 +1,14 @@
 import Foundation
 
+struct ClipRange: Equatable, Codable {
+    let startSeconds: Double
+    let endSeconds: Double
+
+    var duration: Double {
+        endSeconds - startSeconds
+    }
+}
+
 enum TimelineZoom: String, CaseIterable, Identifiable {
     case fit = "Fit"
     case detail = "2x"

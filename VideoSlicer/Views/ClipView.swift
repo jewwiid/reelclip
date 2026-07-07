@@ -152,7 +152,7 @@ struct ClipView: View {
                 return query.ranges(forSourceDuration: sourceDuration)
             }
             return viewModel.plannedRanges
-        case .smartPause, .highlight, .aiAssist:
+        case .highlight:
             return viewModel.plannedRanges
         }
     }
@@ -181,7 +181,6 @@ struct ClipView: View {
                 headerSection
                 mediaStage
                 cutComposer
-                transcriptSection
                 plannedClipsSection
                 savedClipsSection
             }
@@ -677,11 +676,6 @@ struct ClipView: View {
                         // timeline, taps "Add to plan".
                         highlightDurationControl
                         highlightAddToPlanButton
-                    } else if viewModel.cutMode == .aiAssist {
-                        promptControl
-                    }
-                    if viewModel.cutMode == .aiAssist {
-                        miniMaxPanel
                     }
                     resetRecipeButton
                 }
@@ -841,94 +835,65 @@ struct ClipView: View {
             Text(secondsFieldTitle)
                 .font(.caption.weight(.bold))
                 .foregroundStyle(AppPalette.secondaryText)
-
             HStack(spacing: 10) {
-                Button {
-                    let current = Int(viewModel.segmentLengthText) ?? 30
-                    let next = max(current - 1, 5)
-                    viewModel.segmentLengthText = "\(next)"
-                    viewModel.defaultSegmentLength = next
-                    PolishKit.Haptics.selection.play()
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
-
-                Slider(
-                    value: segmentStepperBinding,
-                    in: 5...120,
-                    step: 1
-                )
-                .tint(AppPalette.accent)
-
-                Button {
-                    let current = Int(viewModel.segmentLengthText) ?? 30
-                    let next = min(current + 1, 120)
-                    viewModel.segmentLengthText = "\(next)"
-                    viewModel.defaultSegmentLength = next
-                    PolishKit.Haptics.selection.play()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
-
-                Text(viewModel.segmentLengthText)
+                TextField("30", text: $viewModel.segmentLengthText)
+                    .keyboardType(.numberPad)
                     .font(.subheadline.monospacedDigit().weight(.bold))
                     .foregroundStyle(AppPalette.primaryText)
-                    .frame(width: 40, alignment: .trailing)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppPalette.hairline, lineWidth: 1)
+                    }
+                    .frame(width: 80)
+                Text("seconds")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.secondaryText)
+                Spacer()
             }
         }
     }
 
     /// Highlight-mode-specific duration input. Same shape as
     /// `secondsControl` but bound to `highlightDraftDuration` so it doesn't
-    /// get tangled with Fixed mode's segment-length slider.
+    /// get tangled with Fixed mode's segment-length input.
     private var highlightDurationControl: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Clip length")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-                Spacer()
-                Text("\(formattedHighlightDuration) sec")
+            Text("Clip length")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppPalette.secondaryText)
+            HStack(spacing: 10) {
+                TextField("5", text: highlightDurationTextBinding)
+                    .keyboardType(.numberPad)
                     .font(.subheadline.monospacedDigit().weight(.bold))
                     .foregroundStyle(AppPalette.primaryText)
-            }
-
-            HStack(spacing: 10) {
-                Slider(
-                    value: highlightDurationBinding,
-                    in: 1...60,
-                    step: 1
-                )
-                .tint(AppPalette.accent)
-
-                Button {
-                    viewModel.setHighlightDuration(max(viewModel.highlightDraftDuration - 1, 1))
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
-                Button {
-                    viewModel.setHighlightDuration(viewModel.highlightDraftDuration + 1)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppPalette.hairline, lineWidth: 1)
+                    }
+                    .frame(width: 80)
+                Text("seconds")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.secondaryText)
+                Spacer()
             }
         }
+    }
+
+    private var highlightDurationTextBinding: Binding<String> {
+        Binding(
+            get: { String(Int(viewModel.highlightDraftDuration)) },
+            set: { newValue in
+                if let parsed = Int(newValue.filter { $0.isNumber }), parsed >= 1 {
+                    viewModel.setHighlightDuration(Double(parsed))
+                }
+            }
+        )
     }
 
     /// The big "Add to plan" button. Committing the current draft appends
@@ -958,13 +923,6 @@ struct ClipView: View {
         }
         .buttonStyle(.plain)
         .disabled(viewModel.highlightDraft == nil)
-    }
-
-    private var highlightDurationBinding: Binding<Double> {
-        Binding(
-            get: { viewModel.highlightDraftDuration },
-            set: { viewModel.setHighlightDuration($0) }
-        )
     }
 
     private var formattedHighlightDuration: String {
@@ -1028,9 +986,6 @@ struct ClipView: View {
         let parsed = viewModel.parsedFixedQuery
         let queryEmpty = viewModel.fixedModeQueryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let parsedIsValid = parsed?.isValid == true
-        let showRepair = !queryEmpty
-            && !parsedIsValid
-            && viewModel.isAppleIntelligenceRepairAvailable
 
         return VStack(alignment: .leading, spacing: 8) {
             TextField(
@@ -1079,140 +1034,8 @@ struct ClipView: View {
                     ? AppPalette.mutedText
                     : (parsedIsValid ? AppPalette.accent : AppPalette.secondaryText)
             )
-
-            // AI repair affordance. Only visible when the parse failed
-            // AND Apple Intelligence is available on this device.
-            if showRepair {
-                fixedModeRepairAffordance
-            }
         }
-        .animation(.snappy(duration: 0.2), value: viewModel.fixedModeRepairState)
-    }
-
-    @ViewBuilder
-    private var fixedModeRepairAffordance: some View {
-        switch viewModel.fixedModeRepairState {
-        case .idle:
-            Button {
-                viewModel.repairFixedModeQuery()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.purple)
-                    Text("Repair with Apple Intelligence")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppPalette.primaryText)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(AppPalette.mutedText)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(
-                    LinearGradient(
-                        colors: [Color.purple.opacity(0.10), Color.blue.opacity(0.06)],
-                        startPoint: .leading, endPoint: .trailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.purple.opacity(0.25), lineWidth: 1)
-                }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Repair recipe with Apple Intelligence")
-
-        case .running:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .scaleEffect(0.75)
-                Text("Asking Apple Intelligence…")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppPalette.secondaryText)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-        case .repaired(let suggestion):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "sparkles")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.purple)
-                    Text("Suggestion")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AppPalette.mutedText)
-                        .textCase(.uppercase)
-                        .tracking(0.6)
-                    Spacer(minLength: 0)
-                }
-                Text(suggestion)
-                    .font(.subheadline)
-                    .foregroundStyle(AppPalette.primaryText)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
-                    Button {
-                        viewModel.applyRepairedFixedModeQuery(suggestion)
-                    } label: {
-                        Text("Use this")
-                            .font(.caption.weight(.bold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(AppPalette.accent, in: Capsule())
-                            .foregroundStyle(.white)
-                    }
-                    .buttonStyle(.plain)
-                    Button {
-                        viewModel.dismissRepairedFixedModeQuery()
-                    } label: {
-                        Text("Discard")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(AppPalette.secondaryText)
-                    }
-                    .buttonStyle(.plain)
-                    Spacer(minLength: 0)
-                }
-            }
-            .padding(12)
-            .background(
-                LinearGradient(
-                    colors: [Color.purple.opacity(0.08), Color.blue.opacity(0.04)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                ),
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.purple.opacity(0.25), lineWidth: 1)
-            }
-
-        case .failed(let reason):
-            HStack(spacing: 6) {
-                Image(systemName: "xmark.octagon.fill")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-                Text(reason)
-                    .font(.caption)
-                    .foregroundStyle(AppPalette.secondaryText)
-                Spacer(minLength: 0)
-                Button("Try again") {
-                    viewModel.repairFixedModeQuery()
-                }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.plain)
-                .foregroundStyle(AppPalette.accent)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
+        .animation(.snappy(duration: 0.2), value: parsed)
     }
 
     private var fixedModeButtonInputs: some View {
@@ -1428,82 +1251,6 @@ struct ClipView: View {
         }
     }
 
-    private var promptControl: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Edit intent")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(AppPalette.secondaryText)
-
-            TextField(
-                "What should the cut feel like?",
-                text: $viewModel.editPrompt,
-                axis: .vertical
-            )
-            .lineLimit(2...4)
-            .focused($isSegmentFieldFocused)
-            .textInputAutocapitalization(.sentences)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(AppPalette.hairline, lineWidth: 1)
-            }
-            .foregroundStyle(AppPalette.primaryText)
-        }
-    }
-
-    @ViewBuilder
-    private var miniMaxPanel: some View {
-        if !viewModel.hasMiniMaxAPIKey {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("MiniMax API key required")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-
-                Text("Add your MiniMax API key in Settings to use AI Assist.")
-                    .font(.caption)
-                    .foregroundStyle(AppPalette.mutedText)
-            }
-        }
-    }
-
-    private var transcriptSection: some View {
-        TranscriptView(
-            transcript: viewModel.transcript,
-            state: viewModel.transcriptState,
-            plannedRanges: liveTimelineRanges,
-            onTapWord: { word in
-                viewModel.updateScrubPosition(word.startSeconds)
-                seekPreview(to: word.startSeconds)
-            },
-            onRetranscribe: {
-                guard let url = viewModel.sourceURL else { return }
-                viewModel.transcript = nil
-                viewModel.transcriptState = .processing
-                Task { [weak viewModel] in
-                    let service = TranscriptService()
-                    do {
-                        let result = try await service.transcribe(audioFileURL: url)
-                        guard let viewModel else { return }
-                        viewModel.transcript = result
-                        viewModel.transcriptState = .ready
-                        viewModel.persistCurrentProject()
-                    } catch {
-                        guard let viewModel else { return }
-                        viewModel.transcriptState = .failed(error.localizedDescription)
-                    }
-                }
-            },
-            exportTier: .studio,
-            canExport: subscriptionStore.hasAccess(to: .studio),
-            onRequestUpgrade: {
-                pendingAction = nil
-                showPaywall = true
-            }
-        )
-    }
-
     private var plannedClipsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             collapsibleSectionTitle(
@@ -1683,25 +1430,29 @@ struct ClipView: View {
                 )
             }
 
-            // Plan + Export side by side in 2 columns.
+            // Plan + Export side by side in 2 columns. In highlight mode the
+            // "Plan" button is a no-op (clips are added manually), so we hide
+            // it and only show Export when there are planned ranges.
             HStack(spacing: 10) {
-                Button {
-                    isSegmentFieldFocused = false
-                    PolishKit.Haptics.tap(.medium).play()
-                    guardActionAndShowPaywallIfNeeded {
-                        viewModel.prepareCuts()
+                if viewModel.cutMode != .highlight {
+                    Button {
+                        isSegmentFieldFocused = false
+                        PolishKit.Haptics.tap(.medium).play()
+                        guardActionAndShowPaywallIfNeeded {
+                            viewModel.prepareCuts()
+                        }
+                    } label: {
+                        Label(viewModel.isProcessing ? "Processing" : analyzeButtonTitle, systemImage: "wand.and.stars")
+                            .font(.headline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
                     }
-                } label: {
-                    Label(viewModel.isProcessing ? "Processing" : analyzeButtonTitle, systemImage: "wand.and.stars")
-                        .font(.headline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 54)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AppPalette.background)
+                    .background(viewModel.canPrepare ? AppPalette.accent : AppPalette.disabledSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .disabled(!viewModel.canPrepare)
+                    .polishPressFeedback(scale: 0.97, pressedOpacity: 0.85)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(AppPalette.background)
-                .background(viewModel.canPrepare ? AppPalette.accent : AppPalette.disabledSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .disabled(!viewModel.canPrepare)
-                .polishPressFeedback(scale: 0.97, pressedOpacity: 0.85)
 
                 if viewModel.isProcessing {
                     Button {
@@ -1747,31 +1498,12 @@ struct ClipView: View {
         }
     }
 
-    private var segmentStepperBinding: Binding<Double> {
-        Binding(
-            get: {
-                viewModel.parsedSegmentLength ?? 30
-            },
-            set: { newValue in
-                guard newValue.isFinite else { return }
-                viewModel.segmentLengthText = "\(Int(newValue.rounded()))"
-            }
-        )
-    }
-
     /// Run an action if entitlement allows; otherwise stash the action and
     /// show the paywall. The action re-runs after the user subscribes
     /// because `PaywallView` listens to tier change and we read pendingAction
     /// back in `onChange(of:)`.
     private func guardActionAndShowPaywallIfNeeded(_ action: @escaping () -> Void) {
-        // AI Assist requires Creator; the other modes run for free.
-        let required: SubscriptionStore.Tier = (viewModel.cutMode == .aiAssist) ? .creator : .free
-        if subscriptionStore.hasAccess(to: required) {
-            action()
-        } else {
-            pendingAction = action
-            showPaywall = true
-        }
+        action()
     }
 
     private var progressPercent: Int {
@@ -1865,12 +1597,8 @@ struct ClipView: View {
         switch viewModel.cutMode {
         case .fixed:
             return "Plan Fixed Clips"
-        case .smartPause:
-            return "Analyze Smart Cuts"
         case .highlight:
-            return "Find Highlights"
-        case .aiAssist:
-            return viewModel.hasMiniMaxAPIKey ? "Ask MiniMax" : "Add MiniMax Key"
+            return "Add Clip"
         }
     }
 
@@ -1885,12 +1613,8 @@ struct ClipView: View {
         switch viewModel.cutMode {
         case .fixed:
             return "Exact chunks for quick batch prep."
-        case .smartPause:
-            return "Finds quiet audio gaps and keeps fallback timing ready."
         case .highlight:
-            return "Scores visual moments with on-device analysis."
-        case .aiAssist:
-            return "Uses local timeline signals and MiniMax M3 to draft clips."
+            return "Manually pick moments to keep."
         }
     }
 

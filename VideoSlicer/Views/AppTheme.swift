@@ -22,12 +22,8 @@ extension CutMode {
         switch self {
         case .fixed:
             return "scissors"
-        case .smartPause:
-            return "waveform"
         case .highlight:
             return "sparkles.tv"
-        case .aiAssist:
-            return "brain.head.profile"
         }
     }
 
@@ -35,12 +31,8 @@ extension CutMode {
         switch self {
         case .fixed:
             return "Fixed"
-        case .smartPause:
-            return "Pause"
         case .highlight:
             return "Highlight"
-        case .aiAssist:
-            return "AI"
         }
     }
 }

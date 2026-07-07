@@ -7,9 +7,7 @@ import UIKit
 
 enum CutMode: String, CaseIterable, Identifiable, Codable {
     case fixed = "Fixed"
-    case smartPause = "Smart Pause"
     case highlight = "Highlight"
-    case aiAssist = "AI Assist"
 
     var id: String { rawValue }
 }
@@ -33,7 +31,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     @Published var durationSeconds: Double?
     @Published var cutMode: CutMode = .fixed
     @Published var segmentLengthText = "30"
-    @Published var editPrompt = "Make a fast reel"
     @Published var sourceThumbnails: [MediaThumbnail] = []
     @Published var waveformSamples: [WaveformSample] = []
     @Published var scrubPositionSeconds = 0.0
@@ -57,12 +54,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     @Published var isProjectBrowserVisible = true
     @Published private(set) var thumbnailCache: [UUID: UIImage] = [:]
     @Published var currentProjectID: UUID?
-    @Published var hasMiniMaxAPIKey = false
-    @Published var selectedAIProvider: AIProvider = .appleIntelligence
     @Published var pendingExportClips: [SegmentOutput]?
-    @Published var transcript: Transcript?
-    @Published var transcriptState: TranscriptState = .idle
-    private var transcriptTask: Task<Void, Never>?
     @Published var isShowingExportPreview: Bool = false
     @Published var projectTitleDraft: String = ""
     /// PHAsset localIdentifier for the currently-loaded source video.
@@ -75,37 +67,17 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     /// Subscription tier for the current run. Updated by `updateTier(_:)` whenever
     /// the SubscriptionStore's `@Published tier` changes. Drives every
-    /// downstream limit check (source duration, export preset, watermark,
-    /// AI quota, transcript export).
+    /// downstream limit check (source duration, export preset, watermark).
     @Published private(set) var currentTier: SubscriptionStore.Tier = .free
 
-    /// Free-tier AI plan usage this calendar month. Resets when
-    /// `currentAITierPeriodStart` rolls into a new month.
-    @Published private(set) var aiPlansThisMonth: Int = 0
-    @Published private(set) var currentAITierPeriodStart: Date = AIUsagePeriodStore.startOfCurrentMonth()
-    /// True after the user has used their free-tier quota this month.
-    @Published private(set) var hasReachedFreeAIQuota: Bool = false
     @Published var defaultCutMode: CutMode {
         didSet { userDefaultsStore.defaultCutMode = defaultCutMode }
     }
     @Published var defaultSegmentLength: Int {
         didSet {
             userDefaultsStore.defaultSegmentLengthSeconds = defaultSegmentLength
-            // One-way sync: when the user changes "Seconds per clip"
-            // (the persistent default), propagate the new value into
-            // Highlight mode's "Clip length" — UNLESS the user has
-            // already manually overridden Highlight length this
-            // session. Once they tap the Highlight control, it's
-            // theirs until they tap the Seconds control again.
-            propagateDefaultSegmentLengthToHighlight()
         }
     }
-    /// True after the user has touched the Highlight "Clip length"
-    /// control. While `true`, edits to `defaultSegmentLength` do NOT
-    /// overwrite `highlightDraftDuration`. Reset back to `false`
-    /// whenever `defaultSegmentLength` changes (the user has re-asserted
-    /// the fallback, so Highlight should follow again).
-    @Published private(set) var hasManualHighlightDuration: Bool = false
     @Published var fixedModeQueryDraft: String = ""
     @Published var fixedModeInputStyle: FixedModeInputStyle = .buttons
     @Published var fixedModeButtonCount: Int = 4
@@ -114,93 +86,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     var parsedFixedQuery: ClipQuery? {
         ClipQueryParser.parse(fixedModeQueryDraft)
-    }
-
-    /// State for the "Repair with Apple Intelligence" affordance in the
-    /// Fixed-mode text input. `.idle` = show button. `.running` = spinner.
-    /// `.repaired(String)` = show "Apply suggestion" CTA. `.failed(String)`
-    /// = show error toast. Read by `ClipView.fixedModeTextInput`.
-    enum RepairState: Equatable {
-        case idle
-        case running
-        case repaired(String)
-        case failed(String)
-    }
-
-    @Published var fixedModeRepairState: RepairState = .idle
-
-    /// Returns true when the Apple Intelligence framework is available
-    /// (iOS 26+). The actual call may still fail at runtime if the user
-    /// hasn't enabled Apple Intelligence or the device isn't eligible —
-    /// we surface that via `RepairState.failed`.
-    var isAppleIntelligenceRepairAvailable: Bool {
-        if #available(iOS 26, *) {
-            return true
-        }
-        return false
-    }
-
-    /// Call `FixedModeQueryRepairer` on the current draft and surface the
-    /// result via `fixedModeRepairState`. Runs on a background-friendly
-    /// task (the repairer is async) and hops back to the main actor to
-    /// publish. No-ops on pre-iOS 26 hardware.
-    func repairFixedModeQuery() {
-        guard #available(iOS 26, *) else {
-            fixedModeRepairState = .failed("Requires iOS 26 or later.")
-            return
-        }
-        let raw = fixedModeQueryDraft
-        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            fixedModeRepairState = .failed("Type a recipe first.")
-            return
-        }
-        fixedModeRepairState = .running
-        Task { [weak self] in
-            do {
-                let repairer = FixedModeQueryRepairer()
-                guard let repaired = try await repairer.repair(raw) else {
-                    await MainActor.run {
-                        self?.fixedModeRepairState = .failed(
-                            "Couldn't repair that recipe. Try Buttons."
-                        )
-                    }
-                    return
-                }
-                // Sanity: make sure the repair actually parses. If not,
-                // surface a failure rather than letting a broken phrase
-                // sit in the field.
-                if ClipQueryParser.parse(repaired)?.isValid == true {
-                    await MainActor.run {
-                        self?.fixedModeRepairState = .repaired(repaired)
-                    }
-                } else {
-                    await MainActor.run {
-                        self?.fixedModeRepairState = .failed(
-                            "Repaired recipe still doesn't parse."
-                        )
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    self?.fixedModeRepairState = .failed(
-                        error.localizedDescription
-                    )
-                }
-            }
-        }
-    }
-
-    /// Apply the AI-repaired text into the draft (so the parser runs
-    /// against it and the chips light up). Idempotent.
-    func applyRepairedFixedModeQuery(_ text: String) {
-        fixedModeQueryDraft = text
-        fixedModeRepairState = .idle
-        PolishKit.Haptics.tap(.medium).play()
-    }
-
-    /// Discard the AI suggestion and return to idle.
-    func dismissRepairedFixedModeQuery() {
-        fixedModeRepairState = .idle
     }
 
     /// Two-way sync between text input and button input.
@@ -253,16 +138,13 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     @Published var errorMessage: String?
 
     private let segmenter = VideoSegmenter()
-    private let smartCutAnalyzer = SmartCutAnalyzer()
     private let previewGenerator = MediaPreviewGenerator()
     private let waveformAnalyzer = WaveformAnalyzer()
     private let mediaWorkspace: MediaWorkspace
     private let projectStore: MediaProjectStore
-    private let credentialStore = CredentialStore()
     private let exportNotifications: ExportNotificationScheduling
     private let exportBackgroundTasks: ExportBackgroundTaskManaging
     private var userDefaultsStore: UserDefaultsStore
-    private let miniMaxAPIKeyAccount = "minimax-api-key"
     private let exportRetentionInterval: TimeInterval = 7 * 24 * 60 * 60
     private var processingTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
@@ -284,8 +166,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         self.defaultSegmentLength = defaults.defaultSegmentLengthSeconds
         loadProjects()
         cleanupExpiredExports()
-        refreshMiniMaxAPIKeyStatus()
-        refreshAIUsagePeriod()
     }
 
     /// Sync the active subscription tier. The store calls this whenever its
@@ -301,42 +181,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
     }
 
-    /// True when a free-tier user has hit the monthly AI plan cap. Paid
-    /// tiers always return false.
-    var canRunAnotherFreeAIPlan: Bool {
-        if currentTier != .free { return true }
-        refreshAIUsagePeriodIfRollover()
-        return aiPlansThisMonth < MediaProcessingLimits.monthlyFreeAIQuota
-    }
-
-    private func refreshAIUsagePeriod() {
-        let (count, periodStart) = AIUsagePeriodStore.read()
-        aiPlansThisMonth = count
-        currentAITierPeriodStart = periodStart
-        hasReachedFreeAIQuota = count >= MediaProcessingLimits.monthlyFreeAIQuota
-    }
-
-    private func refreshAIUsagePeriodIfRollover() {
-        let startOfMonth = AIUsagePeriodStore.startOfCurrentMonth()
-        if startOfMonth != currentAITierPeriodStart {
-            // New month — reset the counter atomically.
-            AIUsagePeriodStore.write(count: 0, periodStart: startOfMonth)
-            aiPlansThisMonth = 0
-            currentAITierPeriodStart = startOfMonth
-            hasReachedFreeAIQuota = false
-        }
-    }
-
-    /// Increments the AI plan counter and persists it. Call only when an AI
-    /// plan was actually dispatched (not when the user opens the paywall).
-    func recordAIPlanInvocation() {
-        refreshAIUsagePeriodIfRollover()
-        let next = aiPlansThisMonth + 1
-        aiPlansThisMonth = next
-        hasReachedFreeAIQuota = next >= MediaProcessingLimits.monthlyFreeAIQuota
-        AIUsagePeriodStore.write(count: next, periodStart: currentAITierPeriodStart)
-    }
-
     var isProcessing: Bool {
         processingPhase.isBusy
     }
@@ -344,8 +188,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     var canPrepare: Bool {
         sourceURL != nil &&
             parsedSegmentLength != nil &&
-            !isProcessing &&
-            (cutMode != .aiAssist || hasMiniMaxAPIKey)
+            !isProcessing
     }
 
     var canExportPreparedClips: Bool {
@@ -551,7 +394,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             return "\(plannedRanges.count)"
         }
 
-        if cutMode == .smartPause || cutMode == .highlight || cutMode == .aiAssist {
+        if cutMode == .highlight {
             return "Auto"
         }
 
@@ -721,41 +564,21 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         return ClipRange(startSeconds: start, endSeconds: start + clampedDuration)
     }
 
-    /// User typed a new clip duration. Mark the duration as manually
-    /// overridden so subsequent edits to `defaultSegmentLength` don't
-    /// trample the user's choice. Does NOT seed `highlightDraftStart`
+    /// User typed a new clip duration. Does NOT seed `highlightDraftStart`
     /// — that happens when the user actually taps the timeline, so the
     /// band only appears once they've chosen a position.
     func setHighlightDuration(_ seconds: Double) {
         let cleaned = seconds.isFinite ? max(seconds, 0.5) : 0.5
         highlightDraftDuration = cleaned
-        hasManualHighlightDuration = true
-    }
-
-    /// Reset the manual-override flag so Highlight duration will follow
-    /// `defaultSegmentLength` again. Called when the user edits
-    /// "Seconds per clip".
-    private func propagateDefaultSegmentLengthToHighlight() {
-        let fallback = Double(defaultSegmentLength)
-        guard fallback.isFinite, fallback >= 0.5 else { return }
-        if !hasManualHighlightDuration {
-            highlightDraftDuration = fallback
-        }
-        // Whether or not we updated Highlight, the user has re-asserted
-        // the fallback — clear the manual flag so future Highlight edits
-        // count as overrides again.
-        hasManualHighlightDuration = false
     }
 
     /// Called once when Highlight mode is entered. Seeds the duration
-    /// from the current "Seconds per clip" default and clears any
-    /// stale manual-override flag so the new value takes effect.
+    /// from the current "Seconds per clip" default.
     /// Does NOT seed `highlightDraftStart` — that should only happen
     /// when the user actually taps the timeline, so the band doesn't
     /// appear "pre-existing" the moment they enter Highlight mode.
     func enterHighlightMode() {
         highlightDraftDuration = Double(defaultSegmentLength)
-        hasManualHighlightDuration = false
         // Clear any leftover draft from the previous session so the
         // timeline reads as empty until the user takes action.
         highlightDraftStart = nil
@@ -1015,35 +838,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
     }
 
-    func saveMiniMaxAPIKey(_ apiKey: String) {
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !trimmedKey.isEmpty else {
-            errorMessage = "Enter a MiniMax API key first."
-            return
-        }
-
-        do {
-            try credentialStore.save(trimmedKey, account: miniMaxAPIKeyAccount)
-            hasMiniMaxAPIKey = true
-            statusMessage = "MiniMax key saved."
-        } catch {
-            errorMessage = error.localizedDescription
-            statusMessage = "Could not save MiniMax key."
-        }
-    }
-
-    func removeMiniMaxAPIKey() {
-        do {
-            try credentialStore.delete(account: miniMaxAPIKeyAccount)
-            hasMiniMaxAPIKey = false
-            statusMessage = "MiniMax key removed."
-        } catch {
-            errorMessage = error.localizedDescription
-            statusMessage = "Could not remove MiniMax key."
-        }
-    }
-
     func prepareCuts() {
         guard let sourceURL, let segmentLength = parsedSegmentLength else {
             errorMessage = "Enter a segment length of at least 1 second."
@@ -1055,15 +849,8 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // ranges. Catch it before any work is dispatched.
         if cutMode == .fixed, recipeHasNoHeadroom,
            let durationSeconds, durationSeconds > 0 {
-            errorMessage = "Source is shorter than one clip. Trim a clip ≤ \(Int(durationSeconds))s, shorten the source, or switch to Smart Pause / Highlight."
+            errorMessage = "Source is shorter than one clip. Trim a clip ≤ \(Int(durationSeconds))s, shorten the source, or switch to Highlight."
             statusMessage = "Recipe needs more source than is available."
-            return
-        }
-
-        // Free-tier AI quota gate. Paid tiers have unlimited runs.
-        if cutMode == .aiAssist, currentTier == .free, !canRunAnotherFreeAIPlan {
-            errorMessage = "You've used your \(MediaProcessingLimits.monthlyFreeAIQuota) free AI plans for this month. Upgrade to Creator from Settings to keep going."
-            statusMessage = "Free-tier AI plan quota reached."
             return
         }
 
@@ -1105,24 +892,14 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                             tier: currentTier
                         )
                     }
-                case .smartPause:
-                    ranges = try await smartCutAnalyzer.ranges(
-                        for: sourceURL,
-                        fallbackSegmentLength: segmentLength
-                    )
                 case .highlight:
-                    // Highlight mode is now fully manual — the user picks
+                    // Highlight mode is fully manual — the user picks
                     // positions/durations on the timeline themselves. We do
                     // NOT auto-detect anything here; the planned ranges are
                     // whatever the user has already added via the "Add to
                     // plan" affordance. If they haven't added any yet, this
                     // is a no-op.
                     ranges = plannedRanges
-                case .aiAssist:
-                    ranges = try await miniMaxRanges(
-                        for: sourceURL,
-                        fallbackSegmentLength: segmentLength
-                    )
                 }
 
                 try Task.checkCancellation()
@@ -1143,13 +920,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
                 guard !plannedRanges.isEmpty else {
                     throw VideoSegmenterError.invalidDuration
-                }
-
-                // Count this AI-Assist run against the quota ONLY when the user
-                // doesn't have their own provider key. BYOK users are paying
-                // the provider themselves — we don't count it.
-                if cutMode == .aiAssist, currentTier == .free, !hasMiniMaxAPIKey {
-                    recordAIPlanInvocation()
                 }
 
                 progress = 1
@@ -1385,14 +1155,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         defaultCutMode = userDefaultsStore.defaultCutMode
         defaultSegmentLength = userDefaultsStore.defaultSegmentLengthSeconds
         // Reset in-session cut recipe state too — mode, segment length,
-        // AI prompt, highlight draft, fixed-mode buttons/prompt all
-        // back to their defaults so the user gets a clean slate.
+        // highlight draft, fixed-mode buttons/prompt all back to their
+        // defaults so the user gets a clean slate.
         cutMode = defaultCutMode
         segmentLengthText = "\(defaultSegmentLength)"
-        editPrompt = "Make a fast reel"
         highlightDraftStart = nil
-        highlightDraftDuration = Double(defaultSegmentLength)
-        hasManualHighlightDuration = false
         fixedModeQueryDraft = ""
         fixedModeInputStyle = .buttons
         fixedModeButtonCount = 4
@@ -1411,12 +1178,8 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         switch cutMode {
         case .fixed:
             return "Planning fixed clips..."
-        case .smartPause:
-            return "Analyzing audio..."
         case .highlight:
             return "Ready — drag the highlight on the timeline."
-        case .aiAssist:
-            return "Asking MiniMax..."
         }
     }
 
@@ -1511,10 +1274,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         frameDurationSeconds = 1.0 / 30.0
         sourceAspectRatio = 16.0 / 9.0
         clips = []
-        transcriptTask?.cancel()
-        transcriptTask = nil
-        transcript = nil
-        transcriptState = .idle
     }
 
     private func setLoadedVideo(url: URL) async throws {
@@ -1534,38 +1293,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         loadWaveform(for: url, durationSeconds: duration)
         refreshPlanForCurrentInputs()
         persistCurrentProject()
-        // New projects don't have a cached transcript — kick off STT now.
-        startTranscriptionIfNeeded(for: url, persistWhenReady: true)
-    }
-
-    /// Run on-device speech-to-text on the given source. If a transcript is
-    /// already cached on the current project, skip the work.
-    private func startTranscriptionIfNeeded(for url: URL, persistWhenReady: Bool) {
-        transcriptTask?.cancel()
-        if let projectID = currentProjectID,
-           let cached = projects.first(where: { $0.id == projectID })?.transcript,
-           !cached.isEmpty {
-            transcript = cached
-            transcriptState = .ready
-            return
-        }
-        transcriptState = .processing
-        transcriptTask = Task { [weak self] in
-            guard let self else { return }
-            let service = TranscriptService()
-            do {
-                let result = try await service.transcribe(audioFileURL: url)
-                if Task.isCancelled { return }
-                self.transcript = result
-                self.transcriptState = .ready
-                if persistWhenReady {
-                    self.persistCurrentProject()
-                }
-            } catch {
-                if Task.isCancelled { return }
-                self.transcriptState = .failed(error.localizedDescription)
-            }
-        }
     }
 
     private func loadProject(_ project: MediaProject) async {
@@ -1597,7 +1324,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         durationSeconds = project.durationSeconds
         cutMode = project.cutMode
         segmentLengthText = project.segmentLengthText
-        editPrompt = project.editPrompt
         // Restore the cached PHAsset identifier so the project
         // can be re-exported with the source reference intact.
         sourcePhotoLibraryIdentifier = project.sourcePhotoLibraryIdentifier
@@ -1609,15 +1335,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             .filter { isClipShareable($0) }
         scrubPositionSeconds = Self.clampedSeconds(project.scrubPositionSeconds, duration: project.durationSeconds)
         isProjectBrowserVisible = false
-
-        // Surface any persisted transcript for the project.
-        if let saved = project.transcript, !saved.isEmpty {
-            transcript = saved
-            transcriptState = .ready
-        } else {
-            transcript = nil
-            transcriptState = .idle
-        }
 
         loadPreviews(for: project.sourceURL, durationSeconds: project.durationSeconds)
         loadWaveform(for: project.sourceURL, durationSeconds: project.durationSeconds)
@@ -1642,13 +1359,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             frameDurationSeconds: Self.safeFrameDuration(frameDurationSeconds),
             cutMode: cutMode,
             segmentLengthText: segmentLengthText,
-            editPrompt: editPrompt,
             plannedRanges: plannedRanges,
             exportedClips: clips
                 .filter { isClipShareable($0) }
                 .map(StoredClipOutput.init(clip:)),
             scrubPositionSeconds: Self.clampedSeconds(scrubPositionSeconds, duration: durationSeconds),
-            transcript: transcript,
             sourcePhotoLibraryIdentifier: sourcePhotoLibraryIdentifier,
             createdAt: existingProject?.createdAt ?? now,
             updatedAt: now
@@ -1772,188 +1487,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             // the planned ranges.
             statusMessage = "Imported \"\(result.project.title)\" — pick a replacement video to start editing."
             currentProjectID = result.project.id
-        }
-    }
-
-    private func refreshMiniMaxAPIKeyStatus() {
-        do {
-            hasMiniMaxAPIKey = try credentialStore.read(account: miniMaxAPIKeyAccount) != nil
-        } catch {
-            hasMiniMaxAPIKey = false
-        }
-    }
-
-    private func miniMaxRanges(for sourceURL: URL, fallbackSegmentLength: Double) async throws -> [ClipRange] {
-        guard let durationSeconds else {
-            throw VideoSegmenterError.invalidDuration
-        }
-
-        try MediaProcessingLimits.validateSourceDuration(durationSeconds, for: currentTier)
-        let features = try await timelineFeaturePack(
-            for: sourceURL,
-            durationSeconds: durationSeconds,
-            fallbackSegmentLength: fallbackSegmentLength
-        )
-
-        // Resolve the user's selected provider, with a smart fallback to MiniMax
-        // (or whatever else has a key) if the requester isn't available.
-        guard let resolved = AIProviderRegistry.resolvedProvider(
-            for: selectedAIProvider,
-            minimax: MiniMaxEditProvider(planner: MiniMaxEditPlanner(apiKey: ""))
-        ) else {
-            throw NSError(
-                domain: "AIProvider",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "No AI provider is available. Select one in Settings."]
-            )
-        }
-
-        let credential: String?
-        if resolved.provider.id.requiresAPIKey {
-            credential = (try? credentialStore.read(account: resolved.provider.id.keychainAccount))?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if credential?.isEmpty != false {
-                throw providerMissingCredentialError(resolved.provider.id)
-            }
-        } else {
-            credential = nil
-        }
-
-        statusMessage = "Asking \(resolved.provider.displayName)…"
-        do {
-            let ranges = try await resolved.provider.planCuts(
-                prompt: editPrompt,
-                features: features,
-                credential: credential
-            )
-            if let fallbackFrom = resolved.fallbackFrom {
-                statusMessage = "\(resolved.provider.displayName) used as fallback for \(fallbackFrom.displayName)."
-            }
-            return ranges
-        } catch {
-            // Re-raise — caller renders the localised error message.
-            throw error
-        }
-    }
-
-    private func providerMissingCredentialError(_ provider: AIProvider) -> Error {
-        switch provider {
-        case .appleIntelligence:
-            return NSError(
-                domain: "AIProvider",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Apple Intelligence is unavailable on this device."]
-            )
-        case .ollama:
-            return NSError(
-                domain: "AIProvider",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Add an Ollama endpoint URL in Settings."]
-            )
-        default:
-            return NSError(
-                domain: "AIProvider",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Add an API key for \(provider.displayName) in Settings."]
-            )
-        }
-    }
-
-    func hasConfiguredCredential(for provider: AIProvider) -> Bool {
-        guard provider.requiresAPIKey else { return true }
-        let stored = (try? credentialStore.read(account: provider.keychainAccount))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return !(stored?.isEmpty ?? true)
-    }
-
-    func credential(for provider: AIProvider) -> String? {
-        (try? credentialStore.read(account: provider.keychainAccount))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    func saveCredential(_ value: String, for provider: AIProvider) throws {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            try credentialStore.delete(account: provider.keychainAccount)
-        } else {
-            try credentialStore.save(trimmed, account: provider.keychainAccount)
-        }
-        if provider == .minimax {
-            hasMiniMaxAPIKey = hasConfiguredCredential(for: .minimax)
-        }
-    }
-
-    private func timelineFeaturePack(
-        for sourceURL: URL,
-        durationSeconds: Double,
-        fallbackSegmentLength: Double
-    ) async throws -> TimelineFeaturePack {
-        let samples: [WaveformSample]
-
-        if waveformSamples.isEmpty {
-            samples = (try? await waveformAnalyzer.samples(
-                for: sourceURL,
-                durationSeconds: durationSeconds,
-                targetSampleCount: MediaProcessingLimits.maximumAIAnalysisPoints
-            )) ?? []
-        } else {
-            samples = Array(waveformSamples.prefix(MediaProcessingLimits.maximumAIAnalysisPoints))
-        }
-
-        let points = timelineFeaturePoints(
-            samples: samples,
-            durationSeconds: durationSeconds
-        )
-        let requestedMaxClips = MediaProcessingLimits.maximumPlannedClips
-        let fallbackRanges = Array(
-            ClipRangeEditor.equalRanges(
-                totalDuration: durationSeconds,
-                segmentLength: fallbackSegmentLength
-            )
-            .prefix(MediaProcessingLimits.maximumPlannedClips)
-        )
-
-        return TimelineFeaturePack(
-            sourceDurationSeconds: durationSeconds,
-            fallbackSegmentLengthSeconds: fallbackSegmentLength,
-            requestedMaxClips: requestedMaxClips,
-            targetPlatform: "Reels/TikTok",
-            analysisPoints: points,
-            fallbackRanges: fallbackRanges
-        )
-    }
-
-    private func timelineFeaturePoints(
-        samples: [WaveformSample],
-        durationSeconds: Double
-    ) -> [TimelineFeaturePoint] {
-        if !samples.isEmpty {
-            return samples.map { sample in
-                let audioLevel = sample.level.isFinite ? min(max(sample.level, 0), 1) : 0
-                return TimelineFeaturePoint(
-                    startSeconds: Self.clampedSeconds(sample.startSeconds, duration: durationSeconds),
-                    endSeconds: Self.clampedSeconds(sample.endSeconds, duration: durationSeconds),
-                    audioLevel: audioLevel,
-                    isQuiet: audioLevel <= 0.16
-                )
-            }
-        }
-
-        guard durationSeconds.isFinite, durationSeconds > 0 else { return [] }
-        let pointCount = min(
-            max(Int(ceil(durationSeconds / 5.0)), 1),
-            MediaProcessingLimits.maximumAIAnalysisPoints
-        )
-        let windowDuration = durationSeconds / Double(pointCount)
-
-        return (0..<pointCount).map { index in
-            let start = Double(index) * windowDuration
-            return TimelineFeaturePoint(
-                startSeconds: start,
-                endSeconds: min(start + windowDuration, durationSeconds),
-                audioLevel: 0,
-                isQuiet: false
-            )
         }
     }
 
