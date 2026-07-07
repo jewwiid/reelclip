@@ -516,7 +516,8 @@ struct ClipView: View {
                     // edge lands.
                     viewModel.updateScrubPosition(newEnd)
                     seekPreview(to: newEnd, pause: true)
-                }
+                },
+                thumbnails: viewModel.sourceThumbnails
             )
             .animation(.snappy(duration: 0.22), value: liveTimelineRanges)
             .animation(.snappy(duration: 0.22), value: effectiveSelectedRangeIndex)
@@ -843,90 +844,55 @@ struct ClipView: View {
                 .foregroundStyle(AppPalette.secondaryText)
 
             HStack(spacing: 10) {
-                Button {
-                    let current = Int(viewModel.segmentLengthText) ?? 30
-                    let next = max(current - 1, 5)
-                    viewModel.segmentLengthText = "\(next)"
-                    viewModel.defaultSegmentLength = next
-                    PolishKit.Haptics.selection.play()
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
-
-                Slider(
-                    value: segmentStepperBinding,
-                    in: 5...120,
-                    step: 1
-                )
-                .tint(AppPalette.accent)
-
-                Button {
-                    let current = Int(viewModel.segmentLengthText) ?? 30
-                    let next = min(current + 1, 120)
-                    viewModel.segmentLengthText = "\(next)"
-                    viewModel.defaultSegmentLength = next
-                    PolishKit.Haptics.selection.play()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
-
-                Text(viewModel.segmentLengthText)
+                TextField("30", text: $viewModel.segmentLengthText)
+                    .keyboardType(.numberPad)
                     .font(.subheadline.monospacedDigit().weight(.bold))
                     .foregroundStyle(AppPalette.primaryText)
-                    .frame(width: 40, alignment: .trailing)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppPalette.hairline, lineWidth: 1)
+                    }
+                    .frame(width: 80)
+
+                Text("seconds")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.secondaryText)
+
+                Spacer()
             }
         }
     }
 
-    /// Highlight-mode-specific duration input. Same shape as
-    /// `secondsControl` but bound to `highlightDraftDuration` so it doesn't
-    /// get tangled with Fixed mode's segment-length slider.
+    /// Highlight-mode-specific duration input. Numeric text field bound
+    /// to `highlightDraftDuration` — no slider.
     private var highlightDurationControl: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Clip length")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-                Spacer()
-                Text("\(formattedHighlightDuration) sec")
-                    .font(.subheadline.monospacedDigit().weight(.bold))
-                    .foregroundStyle(AppPalette.primaryText)
-            }
+            Text("Clip length")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppPalette.secondaryText)
 
             HStack(spacing: 10) {
-                Slider(
-                    value: highlightDurationBinding,
-                    in: 1...60,
-                    step: 1
-                )
-                .tint(AppPalette.accent)
+                TextField("5", text: highlightDurationTextBinding)
+                    .keyboardType(.numberPad)
+                    .font(.subheadline.monospacedDigit().weight(.bold))
+                    .foregroundStyle(AppPalette.primaryText)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(AppPalette.hairline, lineWidth: 1)
+                    }
+                    .frame(width: 80)
 
-                Button {
-                    viewModel.setHighlightDuration(max(viewModel.highlightDraftDuration - 1, 1))
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
-                Button {
-                    viewModel.setHighlightDuration(viewModel.highlightDraftDuration + 1)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 32, height: 32)
-                        .background(AppPalette.controlSurface, in: Circle())
-                }
-                .buttonStyle(.plain)
+                Text("seconds")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.secondaryText)
+
+                Spacer()
             }
         }
     }
@@ -960,10 +926,15 @@ struct ClipView: View {
         .disabled(viewModel.highlightDraft == nil)
     }
 
-    private var highlightDurationBinding: Binding<Double> {
+    private var highlightDurationTextBinding: Binding<String> {
         Binding(
-            get: { viewModel.highlightDraftDuration },
-            set: { viewModel.setHighlightDuration($0) }
+            get: { String(Int(viewModel.highlightDraftDuration)) },
+            set: { newValue in
+                let cleaned = newValue.filter { $0.isNumber }
+                if let parsed = Int(cleaned), parsed >= 1 {
+                    viewModel.setHighlightDuration(Double(parsed))
+                }
+            }
         )
     }
 
@@ -1684,24 +1655,29 @@ struct ClipView: View {
             }
 
             // Plan + Export side by side in 2 columns.
+            // In Highlight mode, the Plan button is hidden — the user adds
+            // clips manually via "Add to planned clips" and goes straight
+            // to Export.
             HStack(spacing: 10) {
-                Button {
-                    isSegmentFieldFocused = false
-                    PolishKit.Haptics.tap(.medium).play()
-                    guardActionAndShowPaywallIfNeeded {
-                        viewModel.prepareCuts()
+                if viewModel.cutMode != .highlight {
+                    Button {
+                        isSegmentFieldFocused = false
+                        PolishKit.Haptics.tap(.medium).play()
+                        guardActionAndShowPaywallIfNeeded {
+                            viewModel.prepareCuts()
+                        }
+                    } label: {
+                        Label(viewModel.isProcessing ? "Processing" : analyzeButtonTitle, systemImage: "wand.and.stars")
+                            .font(.headline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
                     }
-                } label: {
-                    Label(viewModel.isProcessing ? "Processing" : analyzeButtonTitle, systemImage: "wand.and.stars")
-                        .font(.headline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 54)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AppPalette.background)
+                    .background(viewModel.canPrepare ? AppPalette.accent : AppPalette.disabledSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .disabled(!viewModel.canPrepare)
+                    .polishPressFeedback(scale: 0.97, pressedOpacity: 0.85)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(AppPalette.background)
-                .background(viewModel.canPrepare ? AppPalette.accent : AppPalette.disabledSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .disabled(!viewModel.canPrepare)
-                .polishPressFeedback(scale: 0.97, pressedOpacity: 0.85)
 
                 if viewModel.isProcessing {
                     Button {
@@ -1745,18 +1721,6 @@ struct ClipView: View {
                 .fill(AppPalette.hairline)
                 .frame(height: 1)
         }
-    }
-
-    private var segmentStepperBinding: Binding<Double> {
-        Binding(
-            get: {
-                viewModel.parsedSegmentLength ?? 30
-            },
-            set: { newValue in
-                guard newValue.isFinite else { return }
-                viewModel.segmentLengthText = "\(Int(newValue.rounded()))"
-            }
-        )
     }
 
     /// Run an action if entitlement allows; otherwise stash the action and
@@ -1868,7 +1832,7 @@ struct ClipView: View {
         case .smartPause:
             return "Analyze Smart Cuts"
         case .highlight:
-            return "Find Highlights"
+            return "Add Clip"
         case .aiAssist:
             return viewModel.hasMiniMaxAPIKey ? "Ask MiniMax" : "Add MiniMax Key"
         }
@@ -1888,7 +1852,7 @@ struct ClipView: View {
         case .smartPause:
             return "Finds quiet audio gaps and keeps fallback timing ready."
         case .highlight:
-            return "Scores visual moments with on-device analysis."
+            return "Manually pick moments to keep."
         case .aiAssist:
             return "Uses local timeline signals and MiniMax M3 to draft clips."
         }

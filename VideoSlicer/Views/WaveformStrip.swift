@@ -11,14 +11,15 @@ struct WaveformStrip: View {
     var onSelectRange: ((Int) -> Void)? = nil
     var onUpdateRange: ((Int, ClipRange) -> Void)? = nil
     /// In-progress clip selection the user is positioning on the timeline
-    /// before committing via "Add to plan". When non-nil, the strip draws
-    /// a draggable translucent band over the waveform — body-drag slides,
-    /// edge-drag resizes. Independent of `plannedRanges` (which represent
-    /// committed clips).
+    /// before committing via "Add to plan".
     var draftHighlight: ClipRange? = nil
-    var onMoveDraft: ((Double) -> Void)? = nil         // body-drag — new start
-    var onResizeDraftStart: ((Double) -> Void)? = nil   // left-edge drag — new start
-    var onResizeDraftEnd: ((Double) -> Void)? = nil     // right-edge drag — new end
+    var onMoveDraft: ((Double) -> Void)? = nil
+    var onResizeDraftStart: ((Double) -> Void)? = nil
+    var onResizeDraftEnd: ((Double) -> Void)? = nil
+    /// Source video thumbnails for the frame tooltip shown while dragging
+    /// handles. When non-empty, dragging either edge of a planned range or
+    /// the draft highlight shows a small frame preview above the handle.
+    var thumbnails: [MediaThumbnail] = []
 
     var body: some View {
         GeometryReader { proxy in
@@ -34,6 +35,7 @@ struct WaveformStrip: View {
                             range: draft,
                             timeline: timeline,
                             size: proxy.size,
+                            thumbnails: thumbnails,
                             onMove: onMoveDraft,
                             onResizeEnd: onResizeDraftEnd,
                             onResizeStart: onResizeDraftStart
@@ -51,6 +53,7 @@ struct WaveformStrip: View {
                             size: proxy.size,
                             isSelected: index == selectedRangeIndex,
                             frameDuration: frameDuration,
+                            thumbnails: thumbnails,
                             onSelectRange: onSelectRange,
                             onUpdateRange: onUpdateRange
                         )
@@ -272,12 +275,15 @@ struct RangeInteractionView: View {
     let size: CGSize
     let isSelected: Bool
     let frameDuration: Double
+    let thumbnails: [MediaThumbnail]
     let onSelectRange: ((Int) -> Void)?
     let onUpdateRange: ((Int, ClipRange) -> Void)?
 
     @State private var startDragBase: ClipRange?
     @State private var endDragBase: ClipRange?
     @State private var bodyDragBase: ClipRange?
+    /// Which handle is currently being dragged — drives the frame tooltip.
+    @State private var draggingEdge: DraggingEdge? = nil
 
     // Trim handles — Doc: smaller, edge-only geometry.
     //
@@ -356,6 +362,17 @@ struct RangeInteractionView: View {
                 )
                 .gesture(endHandleDrag(width: timeline.width))
             }
+
+            // Frame tooltip — appears above the handle while dragging.
+            if let edge = draggingEdge {
+                let seconds = edge == .start ? range.startSeconds : range.endSeconds
+                let x = timeline.xPosition(for: seconds)
+                HandleFrameTooltip(
+                    seconds: seconds,
+                    xPosition: x,
+                    thumbnails: thumbnails
+                )
+            }
         }
         .frame(width: width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(width >= 8) // skip hit testing for sub-pixel slivers
@@ -403,8 +420,8 @@ struct RangeInteractionView: View {
         return DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
+                if startDragBase == nil { startDragBase = range; draggingEdge = .start }
                 let base = startDragBase ?? range
-                if startDragBase == nil { startDragBase = base }
                 let delta = Double(value.translation.width / width) * totalDuration
                 let edited = ClipRangeEditor.updatedRange(
                     base,
@@ -416,6 +433,7 @@ struct RangeInteractionView: View {
             }
             .onEnded { _ in
                 startDragBase = nil
+                draggingEdge = nil
             }
     }
 
@@ -424,8 +442,8 @@ struct RangeInteractionView: View {
         return DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
+                if endDragBase == nil { endDragBase = range; draggingEdge = .end }
                 let base = endDragBase ?? range
-                if endDragBase == nil { endDragBase = base }
                 let delta = Double(value.translation.width / width) * totalDuration
                 let edited = ClipRangeEditor.updatedRange(
                     base,
@@ -437,6 +455,7 @@ struct RangeInteractionView: View {
             }
             .onEnded { _ in
                 endDragBase = nil
+                draggingEdge = nil
             }
     }
 }
@@ -626,19 +645,16 @@ struct DraftHighlightView: View {
     let range: ClipRange
     let timeline: TimelineGeometry
     let size: CGSize
-    /// Body-drag callback — receives the proposed new start (seconds).
+    let thumbnails: [MediaThumbnail]
     let onMove: ((Double) -> Void)?
-    /// Edge-drag callback — receives the proposed new end (seconds).
-    /// We use end (not delta) because the parent clamps against source
-    /// bounds; trying to compute delta-relative math from the closure
-    /// here fights the re-render loop.
     let onResizeEnd: ((Double) -> Void)?
-    /// Edge-drag callback for the LEFT edge — proposed new start.
     let onResizeStart: ((Double) -> Void)?
 
     @State private var bodyDragBaseStart: Double? = nil
     @State private var startEdgeBase: Double? = nil
     @State private var endEdgeBase: Double? = nil
+    /// Which edge is currently being dragged — drives the frame tooltip.
+    @State private var draggingEdge: DraggingEdge? = nil
 
     // Handle geometry — matches `RangeInteractionView` so dragging the
     // draft's edges feels identical to dragging a committed clip's edges.
@@ -698,6 +714,17 @@ struct DraftHighlightView: View {
                 )
                 .gesture(endEdgeDrag(width: timeline.width))
             }
+
+            // Frame tooltip — appears above the handle while dragging.
+            if let edge = draggingEdge {
+                let seconds = edge == .start ? range.startSeconds : range.endSeconds
+                let x = timeline.xPosition(for: seconds)
+                HandleFrameTooltip(
+                    seconds: seconds,
+                    xPosition: x,
+                    thumbnails: thumbnails
+                )
+            }
         }
         .frame(width: width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(width >= 8)
@@ -721,12 +748,12 @@ struct DraftHighlightView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard width > 0 else { return }
+                if startEdgeBase == nil { startEdgeBase = range.startSeconds; draggingEdge = .start }
                 let base = startEdgeBase ?? range.startSeconds
-                if startEdgeBase == nil { startEdgeBase = base }
                 let delta = Double(value.translation.width / width) * timeline.duration
                 onResizeStart?(base + delta)
             }
-            .onEnded { _ in startEdgeBase = nil }
+            .onEnded { _ in startEdgeBase = nil; draggingEdge = nil }
     }
 
     /// Right edge — drag to change the draft's end. Calls `onResizeEnd`.
@@ -734,12 +761,12 @@ struct DraftHighlightView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard width > 0 else { return }
+                if endEdgeBase == nil { endEdgeBase = range.endSeconds; draggingEdge = .end }
                 let base = endEdgeBase ?? range.endSeconds
-                if endEdgeBase == nil { endEdgeBase = base }
                 let delta = Double(value.translation.width / width) * timeline.duration
                 onResizeEnd?(base + delta)
             }
-            .onEnded { _ in endEdgeBase = nil }
+            .onEnded { _ in endEdgeBase = nil; draggingEdge = nil }
     }
 
     /// Visual handle for the draft edges — same pill shape as the committed
@@ -762,5 +789,59 @@ struct DraftHighlightView: View {
                 .environment(\.layoutDirection, isStart ? .rightToLeft : .leftToRight)
             }
             .shadow(color: Color.black.opacity(0.32), radius: 5, y: 2)
+    }
+}
+
+/// Which timeline edge is being dragged — used by the frame tooltip.
+enum DraggingEdge {
+    case start
+    case end
+}
+
+/// Frame thumbnail tooltip shown above a handle while the user drags it
+/// along the timeline. Displays the nearest source video frame + timecode.
+/// Appears above the strip (negative y offset), centered on the handle's
+/// x-position. Auto-disappears when the drag ends.
+struct HandleFrameTooltip: View {
+    let seconds: Double
+    let xPosition: CGFloat
+    let thumbnails: [MediaThumbnail]
+
+    private var closestThumbnail: MediaThumbnail? {
+        guard !thumbnails.isEmpty else { return nil }
+        return thumbnails.min {
+            abs($0.timeSeconds - seconds) < abs($1.timeSeconds - seconds)
+        }
+    }
+
+    var body: some View {
+        if let thumb = closestThumbnail {
+            VStack(spacing: 0) {
+                Image(uiImage: thumb.image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 48, height: 36)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(AppPalette.accent, lineWidth: 2)
+                    }
+                    .shadow(color: Color.black.opacity(0.4), radius: 6, y: 3)
+
+                Text(ClipRangeFormatter.formatTime(seconds))
+                    .font(.system(size: 10, weight: .black, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(AppPalette.accent, in: Capsule())
+                    .offset(y: -2)
+            }
+            .offset(
+                x: xPosition - 24, // center the 48pt-wide tooltip on the handle
+                y: -50              // raise above the strip
+            )
+            .allowsHitTesting(false)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
     }
 }
