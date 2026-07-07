@@ -1,5 +1,4 @@
 import AVFoundation
-import AVKit
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -472,15 +471,13 @@ struct ClipView: View {
                 scrubPosition: viewModel.scrubPositionSeconds,
                 onScrub: { seconds in
                     viewModel.updateScrubPosition(seconds)
-                    // Scrubbing the waveform repositions the playhead
-                    // but does NOT start playback. (Previously: scrub
-                    // called seekPreview(play: true), which caused
-                    // every drag tick to start playback and produced
-                    // visible "skip ahead" jitter.) The play button
-                    // is the only way to start playback; tapping the
-                    // waveform a second time after pressing play
-                    // pauses, as expected.
-                    seekPreview(to: seconds)
+                    // Scrubbing the waveform repositions the playhead AND
+                    // pauses — continuing to play while the user drags
+                    // causes visible "skip ahead" jitter. `pause: true`
+                    // halts playback; the play button is the only way to
+                    // resume. (Previously: scrub called `play: true`,
+                    // which started playback on every drag tick.)
+                    seekPreview(to: seconds, pause: true)
                     // Scrubbing inside a clip selects it; scrubbing into a gap
                     // clears the selection so the handles disappear.
                     if let index = liveTimelineRanges.firstIndex(where: {
@@ -1698,23 +1695,25 @@ struct ClipView: View {
     // directly via `seekPreview(to:)`. Single source of truth for
     // "where is the playhead."
 
-    /// Seek the preview player to a specific time and start playback if
-    /// it isn't already running. Called from both the slider and the
-    /// waveform drag so the user always sees the frame at the scrubber
-    /// position. If `play: true` we start playback so scrubbing feels
-    /// like "playing through" that range of the video.
     /// Seek the preview player to a specific time and *optionally* start
-    /// playback. Scrubbing/tapping the waveform, a thumbnail, or a transcript
-    /// word only repositions the playhead — it does NOT auto-start playback.
-    /// The play button is the single path that ever calls `play: true`. This
-    /// avoids the bug where every scrub tick forced playback to start.
+    /// playback.
     ///
-    /// Also avoids the race where we previously gate `play()` on
-    /// `timeControlStatus != .playing` — that check is racy because `seek`
-    /// is async; the player may be mid-seek. `play()` and `pause()` are
-    /// idempotent on `AVPlayer`, so always calling them is both simpler and
-    /// race-free.
-    private func seekPreview(to seconds: Double, play: Bool = false) {
+    /// Scrubbing the waveform, tapping a thumbnail, or tapping a transcript
+    /// word only repositions the playhead — it does NOT auto-start playback.
+    /// The play button is the single path that ever calls `play: true`.
+    /// This avoids the bug where every scrub tick forced playback to start.
+    ///
+    /// `play()` and `pause()` are idempotent on `AVPlayer`, so we always
+    /// call them unconditionally — no `timeControlStatus` race against the
+    /// async `seek`.
+    ///
+    /// When `play: false` (the default), `seekPreview` preserves the current
+    /// playback state: if the user is already playing, playback continues
+    /// from the new position; if they're paused, they stay paused. This
+    /// matches the "tap a thumbnail to jump there and keep watching" mental
+    /// model while letting the waveform scrub explicitly pause (it passes
+    /// `pause: true`).
+    private func seekPreview(to seconds: Double, play: Bool = false, pause: Bool = false) {
         guard seconds.isFinite, seconds >= 0 else { return }
         // Don't try to drive a player that has no media attached — that
         // path leads to AVFoundation throwing inside `play()` and crashing
@@ -1734,14 +1733,16 @@ struct ClipView: View {
             // when already playing, so just call it.
             previewPlayer.play()
             isPreviewPlaying = true
-        } else {
-            // Scrubbing pauses playback if it was running — otherwise
-            // continuing to play through while the user drags causes the
-            // visible "skip ahead" jitter. The play button is the only
-            // path that ever calls `playPreview()` to resume.
+        } else if pause {
+            // Explicit pause — waveform scrub passes this so dragging the
+            // playhead halts playback. Without it, continuing to play while
+            // the user drags causes visible "skip ahead" jitter.
             previewPlayer.pause()
             isPreviewPlaying = false
         }
+        // else: neither play nor pause — preserve current state. A
+        // thumbnail or transcript-word tap jumps the playhead but lets
+        // playback continue (or stay paused) as it was.
     }
 
     private func togglePreviewPlayback() {

@@ -310,6 +310,12 @@ struct RangeInteractionView: View {
             // Body — tap-to-select AND drag-to-slide. Previously tap-only;
             // users had no way to reposition a range without grabbing an
             // edge handle, which then resized instead of moving.
+            //
+            // `simultaneousGesture` (not `.gesture`) so the tap still fires
+            // alongside the drag — `.gesture` would let the DragGesture
+            // swallow the tap when `minimumDistance` is 0.
+            // `minimumDistance: 4` so a tap (finger down + up with <4pt
+            // movement) still counts as a tap, not a drag.
             Rectangle()
                 .fill(Color.clear)
                 .contentShape(Rectangle())
@@ -318,7 +324,7 @@ struct RangeInteractionView: View {
                 .onTapGesture {
                     onSelectRange?(index)
                 }
-                .gesture(bodyDrag(width: timeline.width))
+                .simultaneousGesture(bodyDrag(width: timeline.width))
 
             if isSelected, width >= minWidthForHandles {
                 // Left edge handle. Hit target extends 12pt OUTSIDE the range
@@ -357,16 +363,17 @@ struct RangeInteractionView: View {
 
     /// Body-drag — slide the whole range without resizing. Snaps so the
     /// resulting range stays on frame boundaries.
+    /// `minimumDistance: 4` so taps (down + up, <4pt) register as taps for
+    /// `onSelectRange`; anything ≥4pt is a drag.
     private func bodyDrag(width: CGFloat) -> some Gesture {
         let totalDuration = timeline.duration
-        return DragGesture(minimumDistance: 0)
+        return DragGesture(minimumDistance: 4)
             .onChanged { value in
                 guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
                 if bodyDragBase == nil { bodyDragBase = range }
                 guard let base = bodyDragBase else { return }
                 let delta = Double(value.translation.width / width) * totalDuration
                 let proposedStart = base.startSeconds + delta
-                let proposedEnd = base.endSeconds + delta
                 let length = base.endSeconds - base.startSeconds
                 // Clamp so the range stays inside the source.
                 let clampedStart = min(max(proposedStart, 0), max(0, totalDuration - length))
