@@ -1906,7 +1906,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         )
         let requestedMaxClips = MediaProcessingLimits.maximumPlannedClips
         let fallbackRanges = Array(
-            SmartCutAnalyzer.equalRanges(
+            ClipRangeEditor.equalRanges(
                 totalDuration: durationSeconds,
                 segmentLength: fallbackSegmentLength
             )
@@ -2077,7 +2077,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     ) throws -> [ClipRange] {
         try MediaProcessingLimits.validateSourceDuration(totalDuration, for: tier)
         let minimumDuration = min(minimumFixedClipDuration(segmentLength: segmentLength), totalDuration)
-        let ranges = SmartCutAnalyzer.equalRanges(
+        let ranges = ClipRangeEditor.equalRanges(
             totalDuration: totalDuration,
             segmentLength: segmentLength,
             minimumFinalSegmentLength: minimumDuration

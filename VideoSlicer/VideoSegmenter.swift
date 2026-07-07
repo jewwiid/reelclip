@@ -149,7 +149,7 @@ struct VideoSegmenter {
         }
 
         let ranges = Self.normalizedRanges(
-            SmartCutAnalyzer.equalRanges(totalDuration: totalSeconds, segmentLength: segmentLength),
+            ClipRangeEditor.equalRanges(totalDuration: totalSeconds, segmentLength: segmentLength),
             totalDuration: totalSeconds
         )
         return try await segmentVideo(

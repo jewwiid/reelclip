@@ -221,7 +221,7 @@ final class VideoSegmenterTests: XCTestCase {
     }
 
     func testEqualRangesMergeTinyFinalRemainderWhenRequested() {
-        let ranges = SmartCutAnalyzer.equalRanges(
+        let ranges = ClipRangeEditor.equalRanges(
             totalDuration: 10.3,
             segmentLength: 5,
             minimumFinalSegmentLength: 1
@@ -234,7 +234,7 @@ final class VideoSegmenterTests: XCTestCase {
     }
 
     func testEqualRangesKeepUsefulFinalRemainder() {
-        let ranges = SmartCutAnalyzer.equalRanges(
+        let ranges = ClipRangeEditor.equalRanges(
             totalDuration: 10.8,
             segmentLength: 5,
             minimumFinalSegmentLength: 0.75
