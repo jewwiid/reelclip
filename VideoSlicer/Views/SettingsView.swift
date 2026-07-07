@@ -3,6 +3,10 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: VideoSplitterViewModel
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
+    @State private var selectedProvider: AIProvider = .appleIntelligence
+    @State private var keyDraft: String = ""
+    @State private var ollamaHost: String = "http://localhost:11434"
+    @State private var saveStatus: String?
     @State private var showPaywall: Bool = false
 
     var body: some View {
@@ -14,6 +18,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         settingsHeader
                         subscriptionCard
+                        aiProviderCard
                         clipDefaultsCard
                     }
                     .padding(18)
@@ -25,6 +30,293 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .tint(AppPalette.accent)
+        .onAppear {
+            selectedProvider = viewModel.selectedAIProvider
+            keyDraft = viewModel.credential(for: selectedProvider) ?? ""
+            if let host = viewModel.credential(for: .ollama), !host.isEmpty {
+                ollamaHost = host
+            }
+        }
+    }
+
+    // MARK: - AI Provider
+
+    private var aiProviderCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 11) {
+                Image(systemName: "brain")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppPalette.accent)
+                    .frame(width: 32, height: 32)
+                    .background(AppPalette.accent.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("AI provider")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppPalette.primaryText)
+                    Text("Powers the AI Assist cut planner")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
+
+                Spacer(minLength: 0)
+
+                providerStatusPill
+            }
+
+            ForEach(AIProvider.allCases) { provider in
+                providerRow(provider)
+            }
+
+            if selectedProvider.requiresAPIKey {
+                Divider().background(AppPalette.hairline)
+                providerKeyEditor
+            } else if selectedProvider == .ollama {
+                Divider().background(AppPalette.hairline)
+                ollamaEditor
+            }
+        }
+        .premiumSurface()
+    }
+
+    private func providerRow(_ provider: AIProvider) -> some View {
+        let isSelected = selectedProvider == provider
+        let configured = viewModel.hasConfiguredCredential(for: provider)
+        let available = isProviderAvailable(provider)
+
+        return Button {
+            selectedProvider = provider
+            keyDraft = viewModel.credential(for: provider) ?? ""
+            viewModel.selectedAIProvider = provider
+            saveStatus = nil
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(isSelected ? AppPalette.accent : AppPalette.controlSurface)
+                        .frame(width: 22, height: 22)
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(AppPalette.background)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(provider.displayName)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppPalette.primaryText)
+                        if configured {
+                            statusPill("Ready", accent: AppPalette.accent)
+                        } else if provider.requiresAPIKey {
+                            statusPill("Needs key", accent: AppPalette.mutedText)
+                        } else if !available {
+                            statusPill("Unavailable", accent: AppPalette.mutedText)
+                        } else {
+                            statusPill("Free", accent: AppPalette.accent)
+                        }
+                    }
+                    Text(provider.blurb)
+                        .font(.caption)
+                        .foregroundStyle(AppPalette.secondaryText)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .background(
+                (isSelected ? AppPalette.accent.opacity(0.10) : AppPalette.controlSurface),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(
+                        isSelected ? AppPalette.accent : AppPalette.hairline,
+                        lineWidth: isSelected ? 1.5 : 1
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(provider.displayName) provider\(isSelected ? ", selected" : "")")
+    }
+
+    private var providerStatusPill: some View {
+        let configured = viewModel.hasConfiguredCredential(for: selectedProvider)
+        let available = isProviderAvailable(selectedProvider)
+        let label: String
+        let accent: Color
+        if configured {
+            label = "Ready"; accent = AppPalette.accent
+        } else if selectedProvider.requiresAPIKey {
+            label = "Needs key"; accent = AppPalette.mutedText
+        } else if !available {
+            label = "Unavailable"; accent = AppPalette.mutedText
+        } else {
+            label = "Free"; accent = AppPalette.accent
+        }
+        return statusPill(label, accent: accent)
+    }
+
+    private func statusPill(_ text: String, accent: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.black))
+            .foregroundStyle(accent == AppPalette.accent ? AppPalette.background : AppPalette.secondaryText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(accent.opacity(0.85), in: Capsule())
+    }
+
+    @ViewBuilder
+    private var providerKeyEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("API key")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppPalette.secondaryText)
+                Spacer()
+                if let url = selectedProvider.signupURL {
+                    Link(destination: url) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.caption2.weight(.bold))
+                            Text("Get \(selectedProvider.displayName) key")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundStyle(AppPalette.accent)
+                    }
+                }
+            }
+
+            SecureField(placeholderForSelected, text: $keyDraft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.subheadline.monospaced())
+                .foregroundStyle(AppPalette.primaryText)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 14)
+                .frame(height: 50)
+                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppPalette.hairline, lineWidth: 1)
+                }
+
+            HStack(spacing: 10) {
+                Button {
+                    saveKey()
+                } label: {
+                    Label("Save Key", systemImage: "key.fill")
+                        .font(.subheadline.weight(.bold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(trimmedKey.isEmpty ? AppPalette.mutedText : AppPalette.background)
+                .background(trimmedKey.isEmpty ? AppPalette.disabledSurface : AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .disabled(trimmedKey.isEmpty)
+
+                Button {
+                    try? viewModel.saveCredential("", for: selectedProvider)
+                    keyDraft = ""
+                    saveStatus = "Removed."
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.subheadline.weight(.bold))
+                        .frame(width: 48, height: 48)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AppPalette.primaryText)
+                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .accessibilityLabel("Remove key")
+            }
+
+            if let saveStatus {
+                Text(saveStatus)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.accent)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var ollamaEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Ollama endpoint")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppPalette.secondaryText)
+
+            TextField("http://localhost:11434", text: $ollamaHost)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(.subheadline.monospaced())
+                .foregroundStyle(AppPalette.primaryText)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 14)
+                .frame(height: 50)
+                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(AppPalette.hairline, lineWidth: 1)
+                }
+
+            Button {
+                let trimmed = ollamaHost.trimmingCharacters(in: .whitespacesAndNewlines)
+                try? viewModel.saveCredential(trimmed, for: .ollama)
+                saveStatus = "Saved."
+            } label: {
+                Label("Save Endpoint", systemImage: "network")
+                    .font(.subheadline.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .foregroundStyle(AppPalette.background)
+                    .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(ollamaHost.isEmpty)
+
+            Text("Make sure Ollama is running locally and you've pulled a model: `ollama pull llama3.2-vision`")
+                .font(.caption)
+                .foregroundStyle(AppPalette.mutedText)
+        }
+    }
+
+    private var placeholderForSelected: String {
+        switch selectedProvider {
+        case .minimax: return "Paste MiniMax API key"
+        case .claude: return "Paste Anthropic API key (sk-ant-…)"
+        case .openai: return "Paste OpenAI API key (sk-…)"
+        case .gemini: return "Paste Gemini API key"
+        case .ollama: return "Endpoint URL"
+        case .appleIntelligence: return ""
+        }
+    }
+
+    private var trimmedKey: String {
+        keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func saveKey() {
+        do {
+            try viewModel.saveCredential(trimmedKey, for: selectedProvider)
+            saveStatus = "Saved."
+        } catch {
+            saveStatus = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func isProviderAvailable(_ provider: AIProvider) -> Bool {
+        switch provider {
+        case .appleIntelligence:
+            #if canImport(FoundationModels)
+            if #available(iOS 26, *) { return true }
+            #endif
+            return false
+        default:
+            return true
+        }
     }
 
     // MARK: - Default clip settings
@@ -132,20 +424,20 @@ struct SettingsView: View {
     private var settingsHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: "gearshape.fill")
+                Image(systemName: "lock.shield")
                     .font(.system(size: 13, weight: .bold))
-                Text("Settings")
+                Text("Secure credentials")
                     .font(.caption.weight(.semibold))
                     .textCase(.uppercase)
                     .tracking(1.1)
             }
             .foregroundStyle(AppPalette.accent)
 
-            Text("Preferences")
+            Text("API Keys")
                 .font(.system(size: 34, weight: .black, design: .rounded))
                 .foregroundStyle(AppPalette.primaryText)
 
-            Text("Manage your subscription and default clip settings.")
+            Text("User-owned AI keys are saved in the iOS Keychain and kept on this device. Apple Intelligence runs on-device for free.")
                 .font(.subheadline)
                 .foregroundStyle(AppPalette.secondaryText)
                 .lineLimit(3)

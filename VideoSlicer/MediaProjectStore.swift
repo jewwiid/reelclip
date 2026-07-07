@@ -84,9 +84,11 @@ struct MediaProject: Identifiable, Codable, Equatable {
     var frameDurationSeconds: Double
     var cutMode: CutMode
     var segmentLengthText: String
+    var editPrompt: String
     var plannedRanges: [ClipRange]
     var exportedClips: [StoredClipOutput]
     var scrubPositionSeconds: Double
+    var transcript: Transcript?
     var createdAt: Date
     var updatedAt: Date
     /// PHAsset localIdentifier for the source video, if it came
@@ -109,9 +111,11 @@ struct MediaProject: Identifiable, Codable, Equatable {
         frameDurationSeconds: Double,
         cutMode: CutMode,
         segmentLengthText: String,
+        editPrompt: String,
         plannedRanges: [ClipRange],
         exportedClips: [StoredClipOutput] = [],
         scrubPositionSeconds: Double,
+        transcript: Transcript? = nil,
         sourcePhotoLibraryIdentifier: String? = nil,
         createdAt: Date,
         updatedAt: Date
@@ -125,9 +129,11 @@ struct MediaProject: Identifiable, Codable, Equatable {
         self.frameDurationSeconds = frameDurationSeconds
         self.cutMode = cutMode
         self.segmentLengthText = segmentLengthText
+        self.editPrompt = editPrompt
         self.plannedRanges = plannedRanges
         self.exportedClips = exportedClips
         self.scrubPositionSeconds = scrubPositionSeconds
+        self.transcript = transcript
         self.sourcePhotoLibraryIdentifier = sourcePhotoLibraryIdentifier
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -143,9 +149,11 @@ struct MediaProject: Identifiable, Codable, Equatable {
         case frameDurationSeconds
         case cutMode
         case segmentLengthText
+        case editPrompt
         case plannedRanges
         case exportedClips
         case scrubPositionSeconds
+        case transcript
         case sourcePhotoLibraryIdentifier
         case createdAt
         case updatedAt
@@ -162,9 +170,11 @@ struct MediaProject: Identifiable, Codable, Equatable {
         self.frameDurationSeconds = try container.decode(Double.self, forKey: .frameDurationSeconds)
         self.cutMode = try container.decode(CutMode.self, forKey: .cutMode)
         self.segmentLengthText = try container.decode(String.self, forKey: .segmentLengthText)
+        self.editPrompt = try container.decode(String.self, forKey: .editPrompt)
         self.plannedRanges = try container.decode([ClipRange].self, forKey: .plannedRanges)
         self.exportedClips = try container.decodeIfPresent([StoredClipOutput].self, forKey: .exportedClips) ?? []
         self.scrubPositionSeconds = try container.decode(Double.self, forKey: .scrubPositionSeconds)
+        self.transcript = try container.decodeIfPresent(Transcript.self, forKey: .transcript)
         self.sourcePhotoLibraryIdentifier = try container.decodeIfPresent(String.self, forKey: .sourcePhotoLibraryIdentifier)
         self.createdAt = try container.decode(Date.self, forKey: .createdAt)
         self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
