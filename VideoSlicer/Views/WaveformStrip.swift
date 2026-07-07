@@ -637,31 +637,70 @@ struct DraftHighlightView: View {
     let onResizeStart: ((Double) -> Void)?
 
     @State private var bodyDragBaseStart: Double? = nil
+    @State private var startEdgeBase: Double? = nil
+    @State private var endEdgeBase: Double? = nil
+
+    // Handle geometry — matches `RangeInteractionView` so dragging the
+    // draft's edges feels identical to dragging a committed clip's edges.
+    private let handleVisibleWidth: CGFloat = 8
+    private let handleHeight: CGFloat = 24
+    private let handleOutsidePadding: CGFloat = 12
+    private let handleInsidePadding: CGFloat = 6
+    private let minWidthForHandles: CGFloat = 50
 
     var body: some View {
         let startX = timeline.xPosition(for: range.startSeconds)
         let endX = timeline.xPosition(for: range.endSeconds)
         let width = max(endX - startX, 1)
 
-        // The draft is intentionally distinct from a committed planned
-        // range: translucent accent fill, dashed accent border, NO edge
-        // handles. Users reposition by dragging the body, change width
-        // via the +/- buttons above the timeline. Avoiding edge handles
-        // here keeps "this is the working draft" obvious when a selected
-        // planned range happens to sit right next to it.
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(AppPalette.accent.opacity(0.18))
-            .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(
-                        AppPalette.accent,
-                        style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [5, 4])
-                    )
+        return ZStack(alignment: .topLeading) {
+            // Body — drag to slide the whole draft. Dashed accent border
+            // distinguishes the working draft from committed clips.
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(AppPalette.accent.opacity(0.18))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(
+                            AppPalette.accent,
+                            style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [5, 4])
+                        )
+                }
+                .frame(width: width, height: size.height)
+                .offset(x: startX, y: 0)
+                .contentShape(Rectangle())
+                .gesture(bodyDrag(width: timeline.width))
+
+            // Edge handles — only when the draft is wide enough.
+            if width >= minWidthForHandles {
+                // Left edge.
+                ZStack {
+                    Color.clear
+                    draftTrimHandle(isStart: true)
+                }
+                .frame(width: handleVisibleWidth + handleOutsidePadding + handleInsidePadding, height: handleHeight)
+                .contentShape(Rectangle())
+                .offset(
+                    x: startX - (handleVisibleWidth + handleOutsidePadding + handleInsidePadding) / 2 + handleInsidePadding,
+                    y: (size.height - handleHeight) / 2
+                )
+                .gesture(startEdgeDrag(width: timeline.width))
+
+                // Right edge.
+                ZStack {
+                    Color.clear
+                    draftTrimHandle(isStart: false)
+                }
+                .frame(width: handleVisibleWidth + handleOutsidePadding + handleInsidePadding, height: handleHeight)
+                .contentShape(Rectangle())
+                .offset(
+                    x: endX - (handleVisibleWidth + handleOutsidePadding + handleInsidePadding) / 2 - handleInsidePadding,
+                    y: (size.height - handleHeight) / 2
+                )
+                .gesture(endEdgeDrag(width: timeline.width))
             }
-            .frame(width: width, height: size.height)
-            .offset(x: startX, y: 0)
-            .contentShape(Rectangle())
-            .gesture(bodyDrag(width: timeline.width))
+        }
+        .frame(width: width, height: size.height, alignment: .topLeading)
+        .allowsHitTesting(width >= 8)
     }
 
     private func bodyDrag(width: CGFloat) -> some Gesture {
@@ -674,5 +713,54 @@ struct DraftHighlightView: View {
                 onMove?(base + delta)
             }
             .onEnded { _ in bodyDragBaseStart = nil }
+    }
+
+    /// Left edge — drag to change the draft's start. Calls `onResizeStart`
+    /// with the proposed new start time; the parent clamps.
+    private func startEdgeDrag(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard width > 0 else { return }
+                let base = startEdgeBase ?? range.startSeconds
+                if startEdgeBase == nil { startEdgeBase = base }
+                let delta = Double(value.translation.width / width) * timeline.duration
+                onResizeStart?(base + delta)
+            }
+            .onEnded { _ in startEdgeBase = nil }
+    }
+
+    /// Right edge — drag to change the draft's end. Calls `onResizeEnd`.
+    private func endEdgeDrag(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard width > 0 else { return }
+                let base = endEdgeBase ?? range.endSeconds
+                if endEdgeBase == nil { endEdgeBase = base }
+                let delta = Double(value.translation.width / width) * timeline.duration
+                onResizeEnd?(base + delta)
+            }
+            .onEnded { _ in endEdgeBase = nil }
+    }
+
+    /// Visual handle for the draft edges — same pill shape as the committed
+    /// clip handles, but with a dashed accent border to match the draft body.
+    private func draftTrimHandle(isStart: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+            .fill(AppPalette.background)
+            .overlay {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .stroke(AppPalette.accent, lineWidth: 1.5)
+            }
+            .overlay {
+                VStack(spacing: 3) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Capsule()
+                            .fill(AppPalette.accent)
+                            .frame(width: 6, height: 1.5)
+                    }
+                }
+                .environment(\.layoutDirection, isStart ? .rightToLeft : .leftToRight)
+            }
+            .shadow(color: Color.black.opacity(0.32), radius: 5, y: 2)
     }
 }
