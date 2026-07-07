@@ -64,9 +64,6 @@
 		1A2B3C4D5E6F70000000002D /* MediaProcessingLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000002E /* MediaProcessingLimits.swift */; };
 		1A2B3C4D5E6F700000000034 /* ExportNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000035 /* ExportNotificationManager.swift */; };
 		1A2B3C4D5E6F700000000036 /* ExportBackgroundTaskManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000037 /* ExportBackgroundTaskManager.swift */; };
-		1A2B3C4D5E6F700000000038 /* TikTokDirectShareService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000039 /* TikTokDirectShareService.swift */; };
-		1A2B3C4D5E6F70000000003A /* TikTokOpenSDKCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1A2B3C4D5E6F700000000067 /* TikTokOpenSDKCore */; };
-		1A2B3C4D5E6F70000000003B /* TikTokOpenShareSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 1A2B3C4D5E6F700000000068 /* TikTokOpenShareSDK */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -140,7 +137,6 @@
 		1A2B3C4D5E6F70000000002E /* MediaProcessingLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaProcessingLimits.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000035 /* ExportNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportNotificationManager.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000037 /* ExportBackgroundTaskManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportBackgroundTaskManager.swift; sourceTree = "<group>"; };
-		1A2B3C4D5E6F700000000039 /* TikTokDirectShareService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TikTokDirectShareService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -148,8 +144,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1A2B3C4D5E6F70000000003A /* TikTokOpenSDKCore in Frameworks */,
-				1A2B3C4D5E6F70000000003B /* TikTokOpenShareSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -216,7 +210,6 @@
 					1A2B3C4D5E6F70000000002C /* CredentialStore.swift */,
 					1A2B3C4D5E6F700000000035 /* ExportNotificationManager.swift */,
 					1A2B3C4D5E6F700000000037 /* ExportBackgroundTaskManager.swift */,
-					1A2B3C4D5E6F700000000039 /* TikTokDirectShareService.swift */,
 					1A2B3C4D5E6F70000000001E /* AIFeatureReadiness.swift */,
 				1A2B3C4D5E6F700000000015 /* PickedVideo.swift */,
 				1A2B3C4D5E6F700000000016 /* Assets.xcassets */,
@@ -271,8 +264,6 @@
 			);
 			name = VideoSlicer;
 			packageProductDependencies = (
-				1A2B3C4D5E6F700000000067 /* TikTokOpenSDKCore */,
-				1A2B3C4D5E6F700000000068 /* TikTokOpenShareSDK */,
 			);
 			productName = VideoSlicer;
 			productReference = 1A2B3C4D5E6F700000000010 /* VideoSlicer.app */;
@@ -325,7 +316,6 @@
 			mainGroup = 1A2B3C4D5E6F700000000030;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				1A2B3C4D5E6F700000000066 /* XCRemoteSwiftPackageReference "tiktok-opensdk-ios" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1A2B3C4D5E6F700000000032 /* Products */;
@@ -406,7 +396,6 @@
 					1A2B3C4D5E6F70000000002B /* CredentialStore.swift in Sources */,
 					1A2B3C4D5E6F700000000034 /* ExportNotificationManager.swift in Sources */,
 					1A2B3C4D5E6F700000000036 /* ExportBackgroundTaskManager.swift in Sources */,
-					1A2B3C4D5E6F700000000038 /* TikTokDirectShareService.swift in Sources */,
 				1A2B3C4D5E6F700000000005 /* PickedVideo.swift in Sources */,
 				1A2B3C4D5E6F7000000000CA /* SubscriptionStore.swift in Sources */,
 				1A2B3C4D5E6F7000000000CC /* PaywallView.swift in Sources */,
@@ -578,8 +567,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TIKTOK_CLIENT_KEY = "";
-				TIKTOK_REDIRECT_URI = "";
 			};
 			name = Debug;
 		};
@@ -606,8 +593,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TIKTOK_CLIENT_KEY = "";
-				TIKTOK_REDIRECT_URI = "";
 			};
 			name = Release;
 		};
@@ -696,27 +681,9 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		1A2B3C4D5E6F700000000066 /* XCRemoteSwiftPackageReference "tiktok-opensdk-ios" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/tiktok/tiktok-opensdk-ios";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.5.0;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		1A2B3C4D5E6F700000000067 /* TikTokOpenSDKCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1A2B3C4D5E6F700000000066 /* XCRemoteSwiftPackageReference "tiktok-opensdk-ios" */;
-			productName = TikTokOpenSDKCore;
-		};
-		1A2B3C4D5E6F700000000068 /* TikTokOpenShareSDK */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1A2B3C4D5E6F700000000066 /* XCRemoteSwiftPackageReference "tiktok-opensdk-ios" */;
-			productName = TikTokOpenShareSDK;
-		};
 /* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 1A2B3C4D5E6F700000000050 /* Project object */;

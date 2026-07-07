@@ -19,14 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>$(TIKTOK_CLIENT_KEY)</string>
-			</array>
-		</dict>
-	</array>
+	<array/>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleDocumentTypes</key>
@@ -82,12 +75,7 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>tiktokopensdk</string>
-		<string>tiktoksharesdk</string>
-		<string>snssdk1180</string>
-		<string>snssdk1233</string>
-	</array>
+	<array/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
@@ -96,10 +84,6 @@
 	<string>ReelClip lets you choose videos from your library to split into shorter clips.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>ReelClip transcribes the audio of your imported videos on-device so you can preview the transcript alongside the planned clips.</string>
-	<key>TikTokClientKey</key>
-	<string>$(TIKTOK_CLIENT_KEY)</string>
-	<key>TikTokRedirectURI</key>
-	<string>$(TIKTOK_REDIRECT_URI)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

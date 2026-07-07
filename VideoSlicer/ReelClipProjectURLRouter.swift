@@ -54,8 +54,7 @@ final class ReelClipProjectURLRouter {
     /// Called by `.onOpenURL` in the app entry point.
     func handle(url: URL) {
         guard url.pathExtension.lowercased() == "reelclip" else {
-            // Not for us — ignore silently (might be a TikTok URL the
-            // sibling router handles).
+            // Not for us — ignore silently.
             return
         }
 

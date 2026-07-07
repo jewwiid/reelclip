@@ -76,7 +76,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// Subscription tier for the current run. Updated by `updateTier(_:)` whenever
     /// the SubscriptionStore's `@Published tier` changes. Drives every
     /// downstream limit check (source duration, export preset, watermark,
-    /// AI quota, TikTok share, transcript export).
+    /// AI quota, transcript export).
     @Published private(set) var currentTier: SubscriptionStore.Tier = .free
 
     /// Free-tier AI plan usage this calendar month. Resets when
@@ -256,7 +256,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     private let smartCutAnalyzer = SmartCutAnalyzer()
     private let previewGenerator = MediaPreviewGenerator()
     private let waveformAnalyzer = WaveformAnalyzer()
-    private let tikTokShareService = TikTokDirectShareService()
     private let mediaWorkspace: MediaWorkspace
     private let projectStore: MediaProjectStore
     private let credentialStore = CredentialStore()
@@ -602,10 +601,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         "Max \(MediaProcessingLimits.maximumSourceDurationLabel) source, \(MediaProcessingLimits.maximumPlannedClips) clips"
     }
 
-    var isTikTokDirectShareConfigured: Bool {
-        TikTokDirectShareService.isConfigured
-    }
-
     func importSelectedVideo() {
         guard let selectedItem else { return }
 
@@ -889,36 +884,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     func isClipShareable(_ clip: SegmentOutput) -> Bool {
         mediaWorkspace.fileManager.fileExists(atPath: clip.url.path)
-    }
-
-    func isClipReadyForTikTokShare(_ clip: SegmentOutput) -> Bool {
-        isClipShareable(clip) && clip.photoLibraryLocalIdentifier != nil
-    }
-
-    func shareClipToTikTok(_ clip: SegmentOutput) {
-        // Studio-only feature. Caller should already gate the UI; we double-
-        // check here because the @Published tier may have changed between
-        // render and tap (e.g. a refund landed).
-        guard currentTier == .studio else {
-            errorMessage = "Direct TikTok share is a Studio feature. Upgrade from Settings to enable it."
-            return
-        }
-        guard isClipShareable(clip) else {
-            errorMessage = "This clip file is no longer available. Export the planned clips again to share it."
-            return
-        }
-
-        Task { [weak self] in
-            guard let self else { return }
-
-            do {
-                let message = try await tikTokShareService.shareVideoClip(clip)
-                statusMessage = message
-            } catch {
-                errorMessage = error.localizedDescription
-                statusMessage = "TikTok share was not started."
-            }
-        }
     }
 
     func startNewProject() {

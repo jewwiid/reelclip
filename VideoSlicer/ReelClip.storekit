@@ -1,0 +1,116 @@
+{
+  "identifier" : "reelclip.subscription",
+  "nonRenewingSubscriptions" : [],
+  "products" : [],
+  "settings" : {
+    "_compatibilityTimeRate" : 1,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : []
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "reelclip.subscription",
+      "localizations" : [
+        {
+          "description" : "ReelClip AI-powered video clipping",
+          "displayName" : "ReelClip Premium",
+          "locale" : "en_US"
+        }
+      ],
+      "name" : "ReelClip Premium",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "9.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "rc.creator.monthly",
+          "introductoryOffer" : {
+            "internalID" : "rc.creator.monthly.trial3d",
+            "numberOfPeriods" : 1,
+            "subscriptionPeriod" : "P3D",
+            "type" : "free"
+          },
+          "localizations" : [
+            {
+              "description" : "Unlimited AI clips, Apple Intelligence, 4K export.",
+              "displayName" : "Creator Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "rc.creator.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Creator Monthly",
+          "subscriptionGroupID" : "reelclip.subscription",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "59.99",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "rc.creator.yearly",
+          "localizations" : [
+            {
+              "description" : "Unlimited AI clips for the year. Save 40%.",
+              "displayName" : "Creator Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "rc.creator.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Creator Yearly",
+          "subscriptionGroupID" : "reelclip.subscription",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "19.99",
+          "familyShareable" : false,
+          "groupNumber" : 3,
+          "internalID" : "rc.studio.monthly",
+          "localizations" : [
+            {
+              "description" : "Priority renders, TikTok direct share, transcripts.",
+              "displayName" : "Studio Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "rc.studio.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Studio Monthly",
+          "subscriptionGroupID" : "reelclip.subscription",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [],
+          "codeOffers" : [],
+          "displayPrice" : "119.99",
+          "familyShareable" : false,
+          "groupNumber" : 4,
+          "internalID" : "rc.studio.yearly",
+          "localizations" : [
+            {
+              "description" : "Full Studio, 12 months at a 40% discount.",
+              "displayName" : "Studio Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "rc.studio.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Studio Yearly",
+          "subscriptionGroupID" : "reelclip.subscription",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

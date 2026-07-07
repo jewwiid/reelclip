@@ -124,7 +124,7 @@ struct ClipView: View {
         }
         .onChange(of: subscriptionStore.tier, initial: true) { _, newTier in
             // Mirror subscription tier into the view model so all downstream
-            // limit checks (duration, export preset, AI quota, TikTok share)
+            // limit checks (duration, export preset, AI quota, transcript export)
             // pick up the user's current plan. The `initial: true` makes sure
             // a restored purchase on cold launch syncs once.
             viewModel.updateTier(newTier)
