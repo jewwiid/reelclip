@@ -127,7 +127,7 @@ struct OpenAIEditProvider: AIEditProvider {
             throw OpenAIEditProviderError.invalidResponse
         }
         let plan = try JSONDecoder().decode(ClipPlanResponse.self, from: contentData)
-        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end) }
+        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end, reason: $0.reason) }
     }
 
     /// Vision-capable path for GPT-4o. Builds a multi-content user message
@@ -219,7 +219,7 @@ struct OpenAIEditProvider: AIEditProvider {
             throw OpenAIEditProviderError.invalidResponse
         }
         let plan = try JSONDecoder().decode(ClipPlanResponse.self, from: contentData)
-        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end) }
+        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end, reason: $0.reason) }
     }
 
     static let visionSystemPrompt = """

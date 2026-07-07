@@ -57,7 +57,7 @@ enum ClipRangeEditor {
         }
 
         guard end - start >= 0.05 else { return range }
-        return ClipRange(startSeconds: start, endSeconds: end)
+        return ClipRange(startSeconds: start, endSeconds: end, reason: range.reason)
     }
 
     static func movedRanges(_ ranges: [ClipRange], from index: Int, direction: Int) -> [ClipRange] {

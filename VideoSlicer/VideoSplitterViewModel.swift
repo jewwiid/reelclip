@@ -692,12 +692,14 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         if index > 0 {
             let prevEnd = plannedRanges[index - 1].endSeconds
             updated = ClipRange(startSeconds: max(updated.startSeconds, prevEnd),
-                                endSeconds: updated.endSeconds)
+                                endSeconds: updated.endSeconds,
+                                reason: updated.reason)
         }
         if index < plannedRanges.count - 1 {
             let nextStart = plannedRanges[index + 1].startSeconds
             updated = ClipRange(startSeconds: updated.startSeconds,
-                                endSeconds: min(updated.endSeconds, nextStart))
+                                endSeconds: min(updated.endSeconds, nextStart),
+                                reason: updated.reason)
         }
         // If clamping collapsed the range below minimum, skip the update
         // rather than emit an invalid range.

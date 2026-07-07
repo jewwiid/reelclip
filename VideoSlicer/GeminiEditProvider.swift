@@ -125,7 +125,7 @@ struct GeminiEditProvider: AIEditProvider {
             throw GeminiEditProviderError.invalidResponse
         }
         let plan = try JSONDecoder().decode(ClipPlanResponse.self, from: jsonData)
-        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end) }
+        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end, reason: $0.reason) }
     }
 
     /// Vision-capable path for Gemini. Builds a `contents` payload with a
@@ -241,7 +241,7 @@ struct GeminiEditProvider: AIEditProvider {
             throw GeminiEditProviderError.invalidResponse
         }
         let plan = try JSONDecoder().decode(ClipPlanResponse.self, from: jsonData)
-        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end) }
+        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end, reason: $0.reason) }
     }
 
     static let visionSystemPrompt = """

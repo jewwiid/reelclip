@@ -4,9 +4,36 @@ import Foundation
 struct ClipRange: Equatable, Codable {
     let startSeconds: Double
     let endSeconds: Double
+    var reason: String?  // AI-provided explanation for why this clip was selected
 
     var duration: Double {
         endSeconds - startSeconds
+    }
+
+    init(startSeconds: Double, endSeconds: Double, reason: String? = nil) {
+        self.startSeconds = startSeconds
+        self.endSeconds = endSeconds
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case startSeconds
+        case endSeconds
+        case reason
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        startSeconds = try container.decode(Double.self, forKey: .startSeconds)
+        endSeconds = try container.decode(Double.self, forKey: .endSeconds)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(startSeconds, forKey: .startSeconds)
+        try container.encode(endSeconds, forKey: .endSeconds)
+        try container.encodeIfPresent(reason, forKey: .reason)
     }
 }
 

@@ -224,7 +224,7 @@ struct VideoSegmenter {
                 let end = min(max(range.endSeconds, 0), totalDuration)
 
                 guard end - start > 0.05 else { return nil }
-                return ClipRange(startSeconds: start, endSeconds: end)
+                return ClipRange(startSeconds: start, endSeconds: end, reason: range.reason)
             }
     }
 

@@ -177,7 +177,7 @@ final class MiniMaxEditPlanner: AIEditPlanner {
         }
 
         let ranges = response.clips.map { clip in
-            ClipRange(startSeconds: clip.start, endSeconds: clip.end)
+            ClipRange(startSeconds: clip.start, endSeconds: clip.end, reason: clip.reason)
         }
 
         guard !ranges.isEmpty else {

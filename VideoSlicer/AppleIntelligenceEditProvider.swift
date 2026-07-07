@@ -47,7 +47,7 @@ struct AppleIntelligenceEditProvider: AIEditProvider {
         )
 
         return response.content.clips.map {
-            ClipRange(startSeconds: $0.start, endSeconds: $0.end)
+            ClipRange(startSeconds: $0.start, endSeconds: $0.end, reason: $0.reason)
         }
     }
 }

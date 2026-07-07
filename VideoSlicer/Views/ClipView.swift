@@ -1541,6 +1541,18 @@ struct ClipView: View {
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(AppPalette.primaryText)
 
+                if let reason = range.reason, !reason.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles")
+                            .font(.caption2)
+                        Text(reason)
+                            .font(.caption)
+                            .italic()
+                    }
+                    .foregroundStyle(AppPalette.accent.opacity(0.8))
+                    .lineLimit(2)
+                }
+
                 EditableClipRangeBar(
                     range: range,
                     duration: viewModel.durationSeconds ?? 0,
@@ -1866,6 +1878,10 @@ struct ClipView: View {
         }
 
         let countLabel = count == 1 ? "1 clip" : "\(count) clips"
+        let hasAIReasons = viewModel.plannedRanges.contains { $0.reason != nil }
+        if hasAIReasons {
+            return "\(countLabel) · AI suggested"
+        }
         return viewModel.hasUnsavedPlan ? "\(countLabel) - Review" : "\(countLabel) - Exported"
     }
 

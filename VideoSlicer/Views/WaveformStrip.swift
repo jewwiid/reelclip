@@ -182,6 +182,20 @@ struct WaveformStrip: View {
                         at: labelOrigin,
                         anchor: .topLeading
                     )
+
+                    // AI-selected badge: a small sparkles icon to the right of
+                    // the clip number, marking this range as AI-suggested (vs a
+                    // purely user-selected range which has no reason attached).
+                    if range.reason != nil {
+                        let sparklesOrigin = CGPoint(x: startX + 22, y: 6)
+                        context.draw(
+                            Text(Image(systemName: "sparkles"))
+                                .font(.caption2)
+                                .foregroundStyle(AppPalette.background),
+                            at: sparklesOrigin,
+                            anchor: .topLeading
+                        )
+                    }
                 }
             }
 
