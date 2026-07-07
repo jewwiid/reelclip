@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -64,6 +65,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     private var transcriptTask: Task<Void, Never>?
     @Published var isShowingExportPreview: Bool = false
     @Published var projectTitleDraft: String = ""
+    /// PHAsset localIdentifier for the currently-loaded source video.
+    /// Captured from `PhotosPickerItem.itemIdentifier` when the user
+    /// picks a video, and written into `.reelclip` export files so
+    /// the recipient can resolve the source video on their device.
+    @Published var sourcePhotoLibraryIdentifier: String?
 
     // MARK: - Paywall state
 
@@ -1402,6 +1408,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         errorMessage = nil
         statusMessage = "Loading video..."
 
+        // Capture the PHAsset localIdentifier before the transferable
+        // load — this is the identifier we write into `.reelclip`
+        // export files so the recipient can resolve the source video.
+        let photoId = item.photoLibraryLocalIdentifier
+
         do {
             guard let video = try await item.loadTransferable(type: PickedVideo.self) else {
                 statusMessage = "Choose a valid video file."
@@ -1415,6 +1426,12 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             // break the next time the temp file is reaped.
             let copiedURL = try mediaWorkspace.importSourceCopy(from: video.url)
             try await setLoadedVideo(url: copiedURL)
+            // Persist the PHAsset identifier so it's available when
+            // the project is exported to a `.reelclip` file. Prefer
+            // the identifier from the PhotosPickerItem (most reliable);
+            // fall back to the one from PickedVideo (set by the
+            // transferable import, currently always nil).
+            sourcePhotoLibraryIdentifier = photoId ?? video.photoLibraryLocalIdentifier
             isProjectBrowserVisible = false
             statusMessage = "Ready to analyze cuts."
         } catch {
@@ -1466,6 +1483,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         if !keepSource {
             sourceURL = nil
             durationSeconds = nil
+            sourcePhotoLibraryIdentifier = nil
         }
         plannedRanges = []
         sourceThumbnails = []
@@ -1561,6 +1579,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         cutMode = project.cutMode
         segmentLengthText = project.segmentLengthText
         editPrompt = project.editPrompt
+        // Restore the cached PHAsset identifier so the project
+        // can be re-exported with the source reference intact.
+        sourcePhotoLibraryIdentifier = project.sourcePhotoLibraryIdentifier
         frameDurationSeconds = Self.safeFrameDuration(project.frameDurationSeconds)
         sourceAspectRatio = Self.safeAspectRatio(project.sourceAspectRatio)
         plannedRanges = VideoSegmenter.normalizedRanges(project.plannedRanges, totalDuration: project.durationSeconds)
@@ -1609,6 +1630,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 .map(StoredClipOutput.init(clip:)),
             scrubPositionSeconds: Self.clampedSeconds(scrubPositionSeconds, duration: durationSeconds),
             transcript: transcript,
+            sourcePhotoLibraryIdentifier: sourcePhotoLibraryIdentifier,
             createdAt: existingProject?.createdAt ?? now,
             updatedAt: now
         )
@@ -1661,15 +1683,35 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                           userInfo: [NSLocalizedDescriptionKey: "Open or create a project before exporting."])
         }
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
+
+        // Look up the PHAsset to populate sourceOriginalFilename +
+        // sourceFileSize in the export file. The localIdentifier
+        // is cached on the viewmodel when the user picks a video.
+        var sourceAsset: PHAsset?
+        var sourceFileSize: Int64?
+        if let photoId = project.sourcePhotoLibraryIdentifier ?? sourcePhotoLibraryIdentifier {
+            let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [photoId], options: nil)
+            if let asset = fetchResult.firstObject {
+                sourceAsset = asset
+                let pw = asset.pixelWidth
+                let ph = asset.pixelHeight
+                let dur = asset.duration.rounded(.up)
+                if pw > 0 && ph > 0 && dur > 0 {
+                    sourceFileSize = Int64(pw) * Int64(ph) * Int64(dur) * 15
+                }
+            }
+        }
+
         let data = try ReelClipProjectCodec.encode(
             project,
-            sourceAsset: nil,            // We don't have the PHAsset reference here; the
-                                         // file will rely on `sourceOriginalFilename` only.
-                                         // Future: surface a per-project PHAsset cache.
-            sourceFileSize: nil,
+            sourceAsset: sourceAsset,
+            sourceFileSize: sourceFileSize,
             appVersion: appVersion
         )
-        let safeName = sanitizeFilename(from: project.title)
+        let safeName = FilenameSanitizer.sanitize(
+            project.title.trimmingCharacters(in: .whitespacesAndNewlines),
+            fallback: "Untitled"
+        )
         let filename = "\(safeName).reelclip"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
         try data.write(to: tempURL, options: [.atomic])
@@ -1684,6 +1726,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     func ingestImportedProject(_ result: ReelClipImportResult) {
+        // Cache the source PHAsset identifier so subsequent exports
+        // from this imported project still carry the source reference.
+        sourcePhotoLibraryIdentifier = result.project.sourcePhotoLibraryIdentifier
         do {
             projects = try projectStore.upsert(result.project)
         } catch {
@@ -1709,17 +1754,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             statusMessage = "Imported \"\(result.project.title)\" — pick a replacement video to start editing."
             currentProjectID = result.project.id
         }
-    }
-
-    private func sanitizeFilename(from title: String) -> String {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleaned = trimmed.isEmpty ? "Untitled" : trimmed
-        // Replace path separators and other unsafe chars with `_`.
-        let allowed = CharacterSet.alphanumerics
-            .union(CharacterSet(charactersIn: "-_ "))
-        return String(cleaned.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
-            .prefix(60)
-            .trimmingCharacters(in: .whitespaces)
     }
 
     private func refreshMiniMaxAPIKeyStatus() {

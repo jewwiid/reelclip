@@ -3,6 +3,7 @@ import Foundation
 struct StoredClipOutput: Identifiable, Codable, Equatable {
     let id: UUID
     var index: Int
+    var title: String
     var path: String
     var startSeconds: Double
     var endSeconds: Double
@@ -15,6 +16,7 @@ struct StoredClipOutput: Identifiable, Codable, Equatable {
     init(
         id: UUID = UUID(),
         index: Int,
+        title: String = "",
         path: String,
         startSeconds: Double,
         endSeconds: Double,
@@ -22,6 +24,7 @@ struct StoredClipOutput: Identifiable, Codable, Equatable {
     ) {
         self.id = id
         self.index = index
+        self.title = title
         self.path = path
         self.startSeconds = startSeconds
         self.endSeconds = endSeconds
@@ -31,16 +34,38 @@ struct StoredClipOutput: Identifiable, Codable, Equatable {
     init(clip: SegmentOutput) {
         self.id = clip.id
         self.index = clip.index
+        // Store the raw (possibly empty) title so a user-cleared rename
+        // round-trips exactly. `SegmentOutput.displayTitle` does the fallback
+        // at render time.
+        self.title = clip.title
         self.path = clip.url.standardizedFileURL.path
         self.startSeconds = clip.startSeconds
         self.endSeconds = clip.endSeconds
         self.photoLibraryLocalIdentifier = clip.photoLibraryLocalIdentifier
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, index, title, path, startSeconds, endSeconds, photoLibraryLocalIdentifier
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.index = try container.decode(Int.self, forKey: .index)
+        // Projects saved before the rename feature shipped don't have a
+        // title field. Decode-if-present keeps those projects loadable.
+        self.title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+        self.path = try container.decode(String.self, forKey: .path)
+        self.startSeconds = try container.decode(Double.self, forKey: .startSeconds)
+        self.endSeconds = try container.decode(Double.self, forKey: .endSeconds)
+        self.photoLibraryLocalIdentifier = try container.decodeIfPresent(String.self, forKey: .photoLibraryLocalIdentifier)
+    }
+
     var segmentOutput: SegmentOutput {
         SegmentOutput(
             id: id,
             index: index,
+            title: title,
             url: url,
             startSeconds: startSeconds,
             endSeconds: endSeconds,
@@ -63,8 +88,14 @@ struct MediaProject: Identifiable, Codable, Equatable {
     var plannedRanges: [ClipRange]
     var exportedClips: [StoredClipOutput]
     var scrubPositionSeconds: Double
+    var transcript: Transcript?
     var createdAt: Date
     var updatedAt: Date
+    /// PHAsset localIdentifier for the source video, if it came
+    /// from the Photos library. Written into `.reelclip` export
+    /// files so the recipient can resolve the source video on
+    /// their device. `nil` for file-imported videos.
+    var sourcePhotoLibraryIdentifier: String?
 
     var sourceURL: URL {
         URL(fileURLWithPath: sourcePath)
@@ -84,6 +115,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         plannedRanges: [ClipRange],
         exportedClips: [StoredClipOutput] = [],
         scrubPositionSeconds: Double,
+        transcript: Transcript? = nil,
+        sourcePhotoLibraryIdentifier: String? = nil,
         createdAt: Date,
         updatedAt: Date
     ) {
@@ -100,6 +133,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         self.plannedRanges = plannedRanges
         self.exportedClips = exportedClips
         self.scrubPositionSeconds = scrubPositionSeconds
+        self.transcript = transcript
+        self.sourcePhotoLibraryIdentifier = sourcePhotoLibraryIdentifier
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -118,6 +153,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         case plannedRanges
         case exportedClips
         case scrubPositionSeconds
+        case transcript
+        case sourcePhotoLibraryIdentifier
         case createdAt
         case updatedAt
     }
@@ -137,6 +174,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         self.plannedRanges = try container.decode([ClipRange].self, forKey: .plannedRanges)
         self.exportedClips = try container.decodeIfPresent([StoredClipOutput].self, forKey: .exportedClips) ?? []
         self.scrubPositionSeconds = try container.decode(Double.self, forKey: .scrubPositionSeconds)
+        self.transcript = try container.decodeIfPresent(Transcript.self, forKey: .transcript)
+        self.sourcePhotoLibraryIdentifier = try container.decodeIfPresent(String.self, forKey: .sourcePhotoLibraryIdentifier)
         self.createdAt = try container.decode(Date.self, forKey: .createdAt)
         self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }

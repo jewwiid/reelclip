@@ -37,7 +37,10 @@ enum ReelClipProjectCodec {
                        sourceAsset: PHAsset? = nil,
                        sourceFileSize: Int64? = nil,
                        appVersion: String) throws -> Data {
-        let photoId = sourceAsset?.localIdentifier
+        // Prefer the PHAsset localIdentifier from the passed asset;
+        // fall back to the project's cached identifier (captured at
+        // pick time and persisted with the project).
+        let photoId = sourceAsset?.localIdentifier ?? project.sourcePhotoLibraryIdentifier
         // Use `PHAssetResource.assetResources(for:).originalFilename` (public API)
         // instead of KVC `value(forKey: "filename")` which is a private API and
         // risks App Store rejection + silent breakage on iOS updates.
@@ -169,11 +172,24 @@ enum ReelClipProjectCodec {
     }
 
     private static func fetchAssetsByFilename(_ filename: String) -> [PHAsset] {
-        // PHAsset doesn't index filename. Search by creation date and
-        // filter via the filename key. Limited but better than nothing.
-        // For now, return empty — a later iteration can implement a
-        // metadata scan via PHAssetResource.assetResources(for:).
-        return []
+        // PHAsset doesn't index filename directly. We scan the user's
+        // video library via PHAssetResource and match by originalFilename.
+        // This is O(n) in the library size but only runs on import (rare)
+        // and is bounded by the user's photo count.
+        let fetchOptions = PHFetchOptions()
+        fetchOptions.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        let fetchResult = PHAsset.fetchAssets(with: .video, options: fetchOptions)
+        var matches: [PHAsset] = []
+        fetchResult.enumerateObjects { asset, _, _ in
+            let resources = PHAssetResource.assetResources(for: asset)
+            for resource in resources {
+                if resource.originalFilename == filename {
+                    matches.append(asset)
+                    return
+                }
+            }
+        }
+        return matches
     }
 
     private static func matchesAssetSize(asset: PHAsset, expected: Int64) -> Bool {
