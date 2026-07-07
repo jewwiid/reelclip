@@ -1019,6 +1019,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
         guard FileManager.default.fileExists(atPath: url.path) else {
             print("⚠️ loadThumbnail: source file missing at \(url.path)")
+            // Fall back to the source video's closest thumbnail so the
+            // card shows a frame instead of a blank film icon.
+            if let fallback = sourceThumbnails.min(by: { abs($0.timeSeconds - midpointSeconds) < abs($1.timeSeconds - midpointSeconds) }) {
+                thumbnailCache[id] = fallback.image
+            }
             return
         }
 
@@ -1037,6 +1042,10 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             thumbnailCache[id] = image
         } catch {
             print("⚠️ loadThumbnail: image extraction failed for \(id) — \(error.localizedDescription)")
+            // Fall back to source thumbnail if extraction fails.
+            if let fallback = sourceThumbnails.min(by: { abs($0.timeSeconds - midpointSeconds) < abs($1.timeSeconds - midpointSeconds) }) {
+                thumbnailCache[id] = fallback.image
+            }
             return
         }
     }
