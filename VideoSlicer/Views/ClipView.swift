@@ -683,11 +683,32 @@ struct ClipView: View {
                     if viewModel.cutMode == .aiAssist {
                         miniMaxPanel
                     }
+                    resetRecipeButton
                 }
                 .padding(.top, 4)
             }
         }
         .premiumSurface()
+    }
+
+    private var resetRecipeButton: some View {
+        Button {
+            viewModel.resetClipDefaults()
+            PolishKit.Haptics.selection.play()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.caption.weight(.bold))
+                Text("Reset to defaults")
+                    .font(.caption.weight(.bold))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .foregroundStyle(AppPalette.secondaryText)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reset cut recipe to defaults")
     }
 
     private var modeSelector: some View {

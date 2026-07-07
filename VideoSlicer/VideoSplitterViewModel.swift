@@ -1410,6 +1410,22 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         userDefaultsStore.resetAll()
         defaultCutMode = userDefaultsStore.defaultCutMode
         defaultSegmentLength = userDefaultsStore.defaultSegmentLengthSeconds
+        // Reset in-session cut recipe state too — mode, segment length,
+        // AI prompt, highlight draft, fixed-mode buttons/prompt all
+        // back to their defaults so the user gets a clean slate.
+        cutMode = defaultCutMode
+        segmentLengthText = "\(defaultSegmentLength)"
+        editPrompt = "Make a fast reel"
+        highlightDraftStart = nil
+        highlightDraftDuration = Double(defaultSegmentLength)
+        hasManualHighlightDuration = false
+        fixedModeQueryDraft = ""
+        fixedModeInputStyle = .buttons
+        fixedModeButtonCount = 4
+        plannedRanges = []
+        clips = []
+        statusMessage = "Cut recipe reset to defaults."
+        persistCurrentProject()
     }
 
     private func cancelPreviewLoading() {
