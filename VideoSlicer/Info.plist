@@ -29,6 +29,56 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>ReelClip Project</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.reelclip.project</string>
+			</array>
+		</dict>
+	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.reelclip.project</string>
+			<key>UTTypeDescription</key>
+			<string>ReelClip Project</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.content</string>
+				<string>public.json</string>
+			</array>
+			<key>UTTypeIconFiles</key>
+			<array>
+				<string>ReelClipProjectIcon-64.png</string>
+				<string>ReelClipProjectIcon-320.png</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>reelclip</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/x-reelclip-project</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>CONVEX_SITE_URL</key>
+	<string>https://wonderful-impala-496.eu-west-1.convex.site</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
@@ -44,6 +94,8 @@
 	<string>ReelClip saves your generated clips to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>ReelClip lets you choose videos from your library to split into shorter clips.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>ReelClip transcribes the audio of your imported videos on-device so you can preview the transcript alongside the planned clips.</string>
 	<key>TikTokClientKey</key>
 	<string>$(TIKTOK_CLIENT_KEY)</string>
 	<key>TikTokRedirectURI</key>

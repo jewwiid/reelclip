@@ -54,6 +54,9 @@
 		1A2B3C4D5E6F70000000000F /* MediaPreviewGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */; };
 		1A2B3C4D5E6F700000000023 /* ClipRangeEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000025 /* ClipRangeEditor.swift */; };
 		1A2B3C4D5E6F7000000000D0 /* ReelClip.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000D1 /* ReelClip.storekit */; };
+		1A2B3C4D5E6F7000000000DA /* ReelClipProjectIcon-64.png in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000DD /* ReelClipProjectIcon-64.png */; };
+		1A2B3C4D5E6F7000000000DB /* ReelClipProjectIcon-128.png in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000DE /* ReelClipProjectIcon-128.png */; };
+		1A2B3C4D5E6F7000000000DC /* ReelClipProjectIcon-320.png in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000DF /* ReelClipProjectIcon-320.png */; };
 		1A2B3C4D5E6F700000000024 /* WaveformAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000026 /* WaveformAnalyzer.swift */; };
 		1A2B3C4D5E6F700000000027 /* MediaProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000028 /* MediaProjectStore.swift */; };
 		1A2B3C4D5E6F700000000029 /* MiniMaxEditPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000002A /* MiniMaxEditPlanner.swift */; };
@@ -124,6 +127,9 @@
 		1A2B3C4D5E6F7000000000D7 /* PolishKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PolishKit.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000D8 /* PreviewVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PreviewVideoView.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000D1 /* ReelClip.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = ReelClip.storekit; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000DD /* ReelClipProjectIcon-64.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = ReelClipProjectIcon-64.png; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000DE /* ReelClipProjectIcon-128.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = ReelClipProjectIcon-128.png; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000DF /* ReelClipProjectIcon-320.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = ReelClipProjectIcon-320.png; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70000000001F /* MediaWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaWorkspace.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreviewGenerator.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000025 /* ClipRangeEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipRangeEditor.swift; sourceTree = "<group>"; };
@@ -220,6 +226,9 @@
 				1A2B3C4D5E6F7000000000E4 /* ConvexEntitlementClient.swift */,
 				1A2B3C4D5E6F7000000000CF /* EntitlementGate.swift */,
 				1A2B3C4D5E6F7000000000D1 /* ReelClip.storekit */,
+				1A2B3C4D5E6F7000000000DD /* ReelClipProjectIcon-64.png */,
+				1A2B3C4D5E6F7000000000DE /* ReelClipProjectIcon-128.png */,
+				1A2B3C4D5E6F7000000000DF /* ReelClipProjectIcon-320.png */,
 				1A2B3C4D5E6F7000000000D3 /* WatermarkRenderer.swift */,
 				1A2B3C4D5E6F7000000000D5 /* AIUsagePeriodStore.swift */,
 				1A2B3C4D5E6F7000000000D7 /* PolishKit.swift */,
@@ -336,6 +345,9 @@
 			files = (
 				1A2B3C4D5E6F700000000006 /* Assets.xcassets in Resources */,
 				1A2B3C4D5E6F7000000000D0 /* ReelClip.storekit in Resources */,
+				1A2B3C4D5E6F7000000000DA /* ReelClipProjectIcon-64.png in Resources */,
+				1A2B3C4D5E6F7000000000DB /* ReelClipProjectIcon-128.png in Resources */,
+				1A2B3C4D5E6F7000000000DC /* ReelClipProjectIcon-320.png in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
