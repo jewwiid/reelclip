@@ -842,7 +842,21 @@ struct ClipView: View {
                 .font(.caption.weight(.bold))
                 .foregroundStyle(AppPalette.secondaryText)
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
+                Button {
+                    let current = Int(viewModel.segmentLengthText) ?? 30
+                    let next = max(current - 1, 5)
+                    viewModel.segmentLengthText = "\(next)"
+                    viewModel.defaultSegmentLength = next
+                    PolishKit.Haptics.selection.play()
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.subheadline.weight(.bold))
+                        .frame(width: 32, height: 32)
+                        .background(AppPalette.controlSurface, in: Circle())
+                }
+                .buttonStyle(.plain)
+
                 Slider(
                     value: segmentStepperBinding,
                     in: 5...120,
@@ -850,10 +864,24 @@ struct ClipView: View {
                 )
                 .tint(AppPalette.accent)
 
+                Button {
+                    let current = Int(viewModel.segmentLengthText) ?? 30
+                    let next = min(current + 1, 120)
+                    viewModel.segmentLengthText = "\(next)"
+                    viewModel.defaultSegmentLength = next
+                    PolishKit.Haptics.selection.play()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.subheadline.weight(.bold))
+                        .frame(width: 32, height: 32)
+                        .background(AppPalette.controlSurface, in: Circle())
+                }
+                .buttonStyle(.plain)
+
                 Text(viewModel.segmentLengthText)
                     .font(.subheadline.monospacedDigit().weight(.bold))
                     .foregroundStyle(AppPalette.primaryText)
-                    .frame(width: 56, alignment: .trailing)
+                    .frame(width: 40, alignment: .trailing)
             }
         }
     }
