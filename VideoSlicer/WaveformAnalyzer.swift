@@ -8,15 +8,6 @@ struct WaveformSample: Identifiable, Equatable {
     let level: Double
 }
 
-/// A time-bucketed RMS energy reading produced by `WaveformAnalyzer`.
-/// Kept simple so it round-trips through the test suite and the smart-cut
-/// analyzer without any Codable ceremony.
-struct AudioEnergyWindow: Equatable {
-    let startSeconds: Double
-    let endSeconds: Double
-    let rms: Float
-}
-
 enum WaveformAnalyzerError: LocalizedError {
     case unableToReadAudio
 

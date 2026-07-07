@@ -69,42 +69,4 @@ enum ClipRangeEditor {
         edited.swapAt(index, destination)
         return edited
     }
-
-    /// Split a duration into equal-length `ClipRange`s. The final range is
-    /// dropped if it's shorter than `minimumFinalSegmentLength` (so a 10.3s
-    /// source with 5s segments becomes two clips, not a 0.3s stub).
-    static func equalRanges(
-        totalDuration: Double,
-        segmentLength: Double,
-        minimumFinalSegmentLength: Double = 0.05
-    ) -> [ClipRange] {
-        guard totalDuration.isFinite, totalDuration > 0 else { return [] }
-        guard segmentLength.isFinite, segmentLength >= 1 else { return [] }
-        guard minimumFinalSegmentLength.isFinite, minimumFinalSegmentLength >= 0 else { return [] }
-
-        let rawClipCount = ceil(totalDuration / segmentLength)
-        guard rawClipCount.isFinite, rawClipCount > 0 else { return [] }
-        let clipCount = Int(rawClipCount)
-
-        var ranges = (0..<clipCount).map { index in
-            let startSeconds = Double(index) * segmentLength
-            let endSeconds = min(startSeconds + segmentLength, totalDuration)
-            return ClipRange(startSeconds: startSeconds, endSeconds: endSeconds)
-        }
-
-        if ranges.count > 1,
-           let finalRange = ranges.last,
-           finalRange.duration < minimumFinalSegmentLength {
-            ranges.removeLast()
-            if let lastIndex = ranges.indices.last {
-                let mergedEnd = totalDuration
-                ranges[lastIndex] = ClipRange(
-                    startSeconds: ranges[lastIndex].startSeconds,
-                    endSeconds: mergedEnd
-                )
-            }
-        }
-
-        return ranges
-    }
 }
