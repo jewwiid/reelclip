@@ -1655,6 +1655,7 @@ struct ClipView: View {
                 )
             }
 
+            // Plan + Export side by side in 2 columns.
             HStack(spacing: 10) {
                 Button {
                     isSegmentFieldFocused = false
@@ -1688,25 +1689,23 @@ struct ClipView: View {
                     .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .accessibilityLabel("Cancel processing")
                     .polishPressFeedback()
+                } else if !viewModel.plannedRanges.isEmpty {
+                    Button {
+                        isSegmentFieldFocused = false
+                        PolishKit.Haptics.tap(.medium).play()
+                        viewModel.exportPreparedClips()
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.down")
+                            .font(.headline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(viewModel.canExportPreparedClips ? AppPalette.primaryText : AppPalette.mutedText)
+                    .background(viewModel.canExportPreparedClips ? AppPalette.controlSurface : AppPalette.disabledSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .disabled(!viewModel.canExportPreparedClips)
+                    .polishPressFeedback()
                 }
-            }
-
-            if !viewModel.plannedRanges.isEmpty {
-                Button {
-                    isSegmentFieldFocused = false
-                    PolishKit.Haptics.tap(.medium).play()
-                    viewModel.exportPreparedClips()
-                } label: {
-                    Label("Export & Save to Photos", systemImage: "square.and.arrow.down")
-                        .font(.subheadline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(viewModel.canExportPreparedClips ? AppPalette.primaryText : AppPalette.mutedText)
-                .background(viewModel.canExportPreparedClips ? AppPalette.controlSurface : AppPalette.disabledSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .disabled(!viewModel.canExportPreparedClips)
-                .polishPressFeedback()
             }
         }
         .padding(.horizontal, 18)
