@@ -1502,15 +1502,39 @@ struct ClipView: View {
 
     private func clipRangeRow(index: Int, range: ClipRange) -> some View {
         HStack(spacing: 12) {
-            VStack(spacing: 4) {
-                Text("#\(index + 1)")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.background)
-                    .frame(width: 34, height: 34)
-                    .background(AppPalette.accent, in: Circle())
-                Text(ClipRangeFormatter.durationLabel(for: range))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(AppPalette.secondaryText)
+            // Thumbnail of the frame closest to the clip's start.
+            // Falls back to the numbered circle when no thumbnails
+            // have been generated yet (e.g. still loading).
+            if let thumb = closestThumbnail(to: range.startSeconds) {
+                Image(uiImage: thumb.image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(AppPalette.hairline, lineWidth: 1)
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        Text("#\(index + 1)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            .padding(3)
+                    }
+            } else {
+                VStack(spacing: 4) {
+                    Text("#\(index + 1)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppPalette.background)
+                        .frame(width: 34, height: 34)
+                        .background(AppPalette.accent, in: Circle())
+                    Text(ClipRangeFormatter.durationLabel(for: range))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -1534,6 +1558,13 @@ struct ClipView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(AppPalette.hairline, lineWidth: 1)
         }
+    }
+
+    /// Find the source thumbnail closest to a given time. Used to show a
+    /// preview frame for each planned clip card.
+    private func closestThumbnail(to seconds: Double) -> MediaThumbnail? {
+        guard !viewModel.sourceThumbnails.isEmpty else { return nil }
+        return viewModel.sourceThumbnails.min { abs($0.timeSeconds - seconds) < abs($1.timeSeconds - seconds) }
     }
 
     private var savedClipsSection: some View {
