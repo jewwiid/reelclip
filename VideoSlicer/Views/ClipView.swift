@@ -500,12 +500,22 @@ struct ClipView: View {
                 draftHighlight: viewModel.cutMode == .highlight ? viewModel.highlightDraft : nil,
                 onMoveDraft: { newStart in
                     viewModel.moveHighlightDraft(toStart: newStart)
+                    // Scrub the preview to the draft's start so the user
+                    // sees what's under the highlight as they drag.
+                    viewModel.updateScrubPosition(newStart)
+                    seekPreview(to: newStart, pause: true)
                 },
                 onResizeDraftStart: { newStart in
                     viewModel.setHighlightStart(newStart)
+                    viewModel.updateScrubPosition(newStart)
+                    seekPreview(to: newStart, pause: true)
                 },
                 onResizeDraftEnd: { newEnd in
                     viewModel.setHighlightEnd(newEnd)
+                    // Scrub to the end so the user sees where the right
+                    // edge lands.
+                    viewModel.updateScrubPosition(newEnd)
+                    seekPreview(to: newEnd, pause: true)
                 }
             )
             .animation(.snappy(duration: 0.22), value: liveTimelineRanges)
