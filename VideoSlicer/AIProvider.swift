@@ -74,6 +74,16 @@ enum AIProvider: String, CaseIterable, Identifiable, Codable {
         case .ollama: return "llama3.2-vision"
         }
     }
+
+    /// True when the provider's default model accepts image inputs alongside
+    /// text. Vision-capable providers receive sampled video frames via
+    /// `planCutsWithVision`; non-vision providers fall back to text-only.
+    var supportsVision: Bool {
+        switch self {
+        case .openai, .claude, .gemini: return true
+        case .minimax, .ollama, .appleIntelligence: return false
+        }
+    }
 }
 
 protocol AIEditProvider {
@@ -87,4 +97,23 @@ protocol AIEditProvider {
         features: TimelineFeaturePack,
         credential: String?
     ) async throws -> [ClipRange]
+    /// Vision-capable providers override this to send frames to the model.
+    /// Default implementation falls back to text-only `planCuts`.
+    func planCutsWithVision(
+        prompt: String,
+        features: TimelineFeaturePack,
+        frames: [VideoFrameSample],
+        credential: String?
+    ) async throws -> [ClipRange]
+}
+
+extension AIEditProvider {
+    func planCutsWithVision(
+        prompt: String,
+        features: TimelineFeaturePack,
+        frames: [VideoFrameSample],
+        credential: String?
+    ) async throws -> [ClipRange] {
+        return try await planCuts(prompt: prompt, features: features, credential: credential)
+    }
 }

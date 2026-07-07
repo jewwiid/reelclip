@@ -1821,11 +1821,21 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
         statusMessage = "Asking \(resolved.provider.displayName)…"
         do {
-            let ranges = try await resolved.provider.planCuts(
-                prompt: editPrompt,
-                features: features,
-                credential: credential
-            )
+            let ranges: [ClipRange]
+            if resolved.provider.id.supportsVision, !features.videoFrames.isEmpty {
+                ranges = try await resolved.provider.planCutsWithVision(
+                    prompt: editPrompt,
+                    features: features,
+                    frames: features.videoFrames,
+                    credential: credential
+                )
+            } else {
+                ranges = try await resolved.provider.planCuts(
+                    prompt: editPrompt,
+                    features: features,
+                    credential: credential
+                )
+            }
             if let fallbackFrom = resolved.fallbackFrom {
                 statusMessage = "\(resolved.provider.displayName) used as fallback for \(fallbackFrom.displayName)."
             }
@@ -1913,14 +1923,49 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             .prefix(MediaProcessingLimits.maximumPlannedClips)
         )
 
+        let videoFrames = try await extractVideoFrames(
+            for: sourceURL,
+            durationSeconds: durationSeconds
+        )
+
         return TimelineFeaturePack(
             sourceDurationSeconds: durationSeconds,
             fallbackSegmentLengthSeconds: fallbackSegmentLength,
             requestedMaxClips: requestedMaxClips,
             targetPlatform: "Reels/TikTok",
             analysisPoints: points,
-            fallbackRanges: fallbackRanges
+            fallbackRanges: fallbackRanges,
+            videoFrames: videoFrames
         )
+    }
+
+    /// Extract up to 8 sampled frames as base64 JPEG for vision-capable
+    /// providers. Reuses already-loaded `sourceThumbnails` when present
+    /// (the timeline UI keeps them hot); otherwise falls back to
+    /// `MediaPreviewGenerator` to pull 8 frames at 512px. Each frame is
+    /// JPEG-compressed at 0.6 quality before base64 encoding so the total
+    /// payload stays around ~240KB.
+    private func extractVideoFrames(
+        for sourceURL: URL,
+        durationSeconds: Double
+    ) async throws -> [VideoFrameSample] {
+        let thumbnails: [MediaThumbnail]
+        if !sourceThumbnails.isEmpty {
+            thumbnails = Array(sourceThumbnails.prefix(8))
+        } else {
+            thumbnails = (try? await previewGenerator.thumbnails(
+                for: sourceURL,
+                durationSeconds: durationSeconds,
+                targetCount: 8,
+                maximumSize: CGSize(width: 512, height: 512)
+            )) ?? []
+        }
+
+        return thumbnails.compactMap { thumbnail in
+            guard let jpegData = thumbnail.image.jpegData(compressionQuality: 0.6) else { return nil }
+            let base64 = jpegData.base64EncodedString()
+            return VideoFrameSample(timeSeconds: thumbnail.timeSeconds, base64JPEG: base64)
+        }
     }
 
     private func timelineFeaturePoints(

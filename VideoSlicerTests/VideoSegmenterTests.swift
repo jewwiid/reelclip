@@ -932,7 +932,8 @@ final class VideoSegmenterTests: XCTestCase {
                 ClipRange(startSeconds: 3, endSeconds: 6),
                 ClipRange(startSeconds: 6, endSeconds: 9),
                 ClipRange(startSeconds: 9, endSeconds: 12)
-            ]
+            ],
+            videoFrames: []
         )
     }
 }

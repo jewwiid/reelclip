@@ -11,6 +11,12 @@ struct TimelineFeaturePack: Codable, Equatable {
     var targetPlatform: String
     var analysisPoints: [TimelineFeaturePoint]
     var fallbackRanges: [ClipRange]
+    var videoFrames: [VideoFrameSample]
+}
+
+struct VideoFrameSample: Codable, Equatable {
+    var timeSeconds: Double
+    var base64JPEG: String
 }
 
 struct TimelineFeaturePoint: Codable, Equatable {

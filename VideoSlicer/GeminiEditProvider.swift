@@ -128,6 +128,134 @@ struct GeminiEditProvider: AIEditProvider {
         return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end) }
     }
 
+    /// Vision-capable path for Gemini. Builds a `contents` payload with a
+    /// text part followed by one `inline_data` part per sampled frame
+    /// (base64 JPEG). Keeps the structured `response_schema` so the
+    /// response is still strict JSON. Falls back to text-only `planCuts`
+    /// when `frames` is empty.
+    func planCutsWithVision(
+        prompt: String,
+        features: TimelineFeaturePack,
+        frames: [VideoFrameSample],
+        credential: String?
+    ) async throws -> [ClipRange] {
+        guard !frames.isEmpty else {
+            return try await planCuts(prompt: prompt, features: features, credential: credential)
+        }
+
+        guard let key = credential, !key.isEmpty else {
+            throw GeminiEditProviderError.missingAPIKey
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let featureJSON = String(
+            data: (try? encoder.encode(features)) ?? Data(),
+            encoding: .utf8
+        ) ?? "{}"
+
+        let systemInstruction = Self.visionSystemPrompt
+
+        let frameTimestamps = frames.map { String(format: "%.2f", $0.timeSeconds) }.joined(separator: ", ")
+        let userText = """
+        User request:
+        \(prompt)
+
+        Sampled frame timestamps (seconds): \(frameTimestamps)
+
+        Audio energy / timeline feature pack:
+        \(featureJSON)
+        """
+
+        var parts: [[String: Any]] = [["text": userText]]
+        for frame in frames {
+            parts.append([
+                "inline_data": [
+                    "mime_type": "image/jpeg",
+                    "data": frame.base64JPEG
+                ]
+            ])
+        }
+
+        let body: [String: Any] = [
+            "system_instruction": [
+                "parts": [["text": systemInstruction]]
+            ],
+            "contents": [
+                [
+                    "role": "user",
+                    "parts": parts
+                ]
+            ],
+            "generationConfig": [
+                "temperature": 0.2,
+                "maxOutputTokens": 1200,
+                "response_mime_type": "application/json",
+                "response_schema": [
+                    "type": "OBJECT",
+                    "properties": [
+                        "clips": [
+                            "type": "ARRAY",
+                            "items": [
+                                "type": "OBJECT",
+                                "properties": [
+                                    "start": ["type": "NUMBER"],
+                                    "end": ["type": "NUMBER"],
+                                    "reason": ["type": "STRING"]
+                                ],
+                                "required": ["start", "end", "reason"]
+                            ]
+                        ]
+                    ],
+                    "required": ["clips"]
+                ]
+            ]
+        ]
+
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "key", value: key)]
+
+        guard let url = components?.url else {
+            throw GeminiEditProviderError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw GeminiEditProviderError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw GeminiEditProviderError.requestFailed(
+                statusCode: http.statusCode,
+                message: String(data: data, encoding: .utf8) ?? "Request failed"
+            )
+        }
+
+        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+        guard let json = decoded.candidates.first?.content.parts.first?.text,
+              let jsonData = json.data(using: .utf8) else {
+            throw GeminiEditProviderError.invalidResponse
+        }
+        let plan = try JSONDecoder().decode(ClipPlanResponse.self, from: jsonData)
+        return plan.clips.map { ClipRange(startSeconds: $0.start, endSeconds: $0.end) }
+    }
+
+    static let visionSystemPrompt = """
+    You are planning short-form clips for Reels and TikTok. You are given:
+    1. Sampled frames from the source video (as images, with timestamps)
+    2. Audio energy levels across the timeline
+    3. The user's edit intent
+
+    Look at the frames to identify: faces, action, text on screen, scene \
+    changes, emotional moments. Combine visual analysis with audio levels to \
+    pick the best segments. Do not invent media outside the source duration. \
+    Always return strict JSON.
+    """
+
     private struct GeminiResponse: Decodable {
         struct Candidate: Decodable {
             struct Content: Decodable {

@@ -117,6 +117,127 @@ struct ClaudeEditProvider: AIEditProvider {
         }
     }
 
+    /// Vision-capable path for Claude. Builds a multi-block user message
+    /// containing the prompt text followed by one `image` content block per
+    /// sampled frame (base64 JPEG). Keeps the tool-use pattern so the
+    /// response is still constrained JSON via `plan_clips`. Falls back to
+    /// text-only `planCuts` when `frames` is empty.
+    func planCutsWithVision(
+        prompt: String,
+        features: TimelineFeaturePack,
+        frames: [VideoFrameSample],
+        credential: String?
+    ) async throws -> [ClipRange] {
+        guard !frames.isEmpty else {
+            return try await planCuts(prompt: prompt, features: features, credential: credential)
+        }
+
+        guard let key = credential, !key.isEmpty else {
+            throw ClaudeEditProviderError.missingAPIKey
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let featureJSON = String(
+            data: (try? encoder.encode(features)) ?? Data(),
+            encoding: .utf8
+        ) ?? "{}"
+
+        let systemPrompt = Self.visionSystemPrompt
+
+        let frameTimestamps = frames.map { String(format: "%.2f", $0.timeSeconds) }.joined(separator: ", ")
+        let userText = """
+        User request:
+        \(prompt)
+
+        Sampled frame timestamps (seconds): \(frameTimestamps)
+
+        Audio energy / timeline feature pack:
+        \(featureJSON)
+        """
+
+        var contentBlocks: [[String: Any]] = [["type": "text", "text": userText]]
+        for frame in frames {
+            contentBlocks.append([
+                "type": "image",
+                "source": [
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": frame.base64JPEG
+                ]
+            ])
+        }
+
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": 1200,
+            "system": [
+                [
+                    "type": "text",
+                    "text": systemPrompt,
+                    "cache_control": ["type": "ephemeral"]
+                ]
+            ],
+            "tools": [
+                [
+                    "name": "plan_clips",
+                    "description": "Return the final clip plan as structured JSON.",
+                    "input_schema": ClaudeEditProvider.clipPlanSchema
+                ]
+            ],
+            "tool_choice": ["type": "tool", "name": "plan_clips"],
+            "messages": [
+                ["role": "user", "content": contentBlocks]
+            ]
+        ]
+
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue(key, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw ClaudeEditProviderError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ClaudeEditProviderError.requestFailed(
+                statusCode: http.statusCode,
+                message: String(data: data, encoding: .utf8) ?? "Request failed"
+            )
+        }
+
+        let decoded = try JSONDecoder().decode(ClaudeResponse.self, from: data)
+        let input = decoded.content
+            .compactMap { block -> ClaudeToolUseBlock? in
+                if case .toolUse(let block) = block { return block }
+                return nil
+            }
+            .first
+
+        guard let input else {
+            throw ClaudeEditProviderError.invalidResponse
+        }
+        return input.input.clips.map {
+            ClipRange(startSeconds: $0.start, endSeconds: $0.end)
+        }
+    }
+
+    static let visionSystemPrompt = """
+    You are planning short-form clips for Reels and TikTok. You are given:
+    1. Sampled frames from the source video (as images, with timestamps)
+    2. Audio energy levels across the timeline
+    3. The user's edit intent
+
+    Look at the frames to identify: faces, action, text on screen, scene \
+    changes, emotional moments. Combine visual analysis with audio levels to \
+    pick the best segments. Do not invent media outside the source duration. \
+    Call the plan_clips tool to return the result. Never include reasoning, \
+    markdown, or explanatory text.
+    """
+
     private static let clipPlanSchema: [String: Any] = [
         "type": "object",
         "properties": [
