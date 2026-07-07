@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import PhotosUI
 import SwiftUI
+import UIKit
 
 enum CutMode: String, CaseIterable, Identifiable, Codable {
     case fixed = "Fixed"
@@ -25,7 +26,7 @@ enum ProcessingPhase: Equatable {
 }
 
 @MainActor
-final class VideoSplitterViewModel: ObservableObject {
+final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink {
     @Published var selectedItem: PhotosPickerItem?
     @Published var sourceURL: URL?
     @Published var durationSeconds: Double?
@@ -35,6 +36,17 @@ final class VideoSplitterViewModel: ObservableObject {
     @Published var sourceThumbnails: [MediaThumbnail] = []
     @Published var waveformSamples: [WaveformSample] = []
     @Published var scrubPositionSeconds = 0.0
+
+    // MARK: - Highlight mode (manual timeline picker)
+    //
+    // Highlight mode is a fully-manual clip-picker. The user enters a
+    // duration, drags the resulting translucent band along the timeline,
+    // resizes its edges, then taps "Add to plan" to commit it to
+    // `plannedRanges`. Each successive "Add" appends a new planned range;
+    // the draft remains where the user left it so they can keep adding
+    // neighbouring segments without re-positioning.
+    @Published var highlightDraftStart: Double? = nil
+    @Published var highlightDraftDuration: Double = 5.0
     @Published var timelineZoom: TimelineZoom = .fit
     @Published var frameDurationSeconds = 1.0 / 30.0
     @Published var sourceAspectRatio = 16.0 / 9.0
@@ -42,8 +54,193 @@ final class VideoSplitterViewModel: ObservableObject {
     @Published var clips: [SegmentOutput] = []
     @Published var projects: [MediaProject] = []
     @Published var isProjectBrowserVisible = true
+    @Published private(set) var thumbnailCache: [UUID: UIImage] = [:]
     @Published var currentProjectID: UUID?
     @Published var hasMiniMaxAPIKey = false
+    @Published var selectedAIProvider: AIProvider = .appleIntelligence
+    @Published var pendingExportClips: [SegmentOutput]?
+    @Published var transcript: Transcript?
+    @Published var transcriptState: TranscriptState = .idle
+    private var transcriptTask: Task<Void, Never>?
+    @Published var isShowingExportPreview: Bool = false
+    @Published var projectTitleDraft: String = ""
+
+    // MARK: - Paywall state
+
+    /// Subscription tier for the current run. Updated by `updateTier(_:)` whenever
+    /// the SubscriptionStore's `@Published tier` changes. Drives every
+    /// downstream limit check (source duration, export preset, watermark,
+    /// AI quota, TikTok share, transcript export).
+    @Published private(set) var currentTier: SubscriptionStore.Tier = .free
+
+    /// Free-tier AI plan usage this calendar month. Resets when
+    /// `currentAITierPeriodStart` rolls into a new month.
+    @Published private(set) var aiPlansThisMonth: Int = 0
+    @Published private(set) var currentAITierPeriodStart: Date = AIUsagePeriodStore.startOfCurrentMonth()
+    /// True after the user has used their free-tier quota this month.
+    @Published private(set) var hasReachedFreeAIQuota: Bool = false
+    @Published var defaultCutMode: CutMode {
+        didSet { userDefaultsStore.defaultCutMode = defaultCutMode }
+    }
+    @Published var defaultSegmentLength: Int {
+        didSet {
+            userDefaultsStore.defaultSegmentLengthSeconds = defaultSegmentLength
+            // One-way sync: when the user changes "Seconds per clip"
+            // (the persistent default), propagate the new value into
+            // Highlight mode's "Clip length" — UNLESS the user has
+            // already manually overridden Highlight length this
+            // session. Once they tap the Highlight control, it's
+            // theirs until they tap the Seconds control again.
+            propagateDefaultSegmentLengthToHighlight()
+        }
+    }
+    /// True after the user has touched the Highlight "Clip length"
+    /// control. While `true`, edits to `defaultSegmentLength` do NOT
+    /// overwrite `highlightDraftDuration`. Reset back to `false`
+    /// whenever `defaultSegmentLength` changes (the user has re-asserted
+    /// the fallback, so Highlight should follow again).
+    @Published private(set) var hasManualHighlightDuration: Bool = false
+    @Published var fixedModeQueryDraft: String = ""
+    @Published var fixedModeInputStyle: FixedModeInputStyle = .buttons
+    @Published var fixedModeButtonCount: Int = 4
+    @Published var fixedModeButtonDuration: Int = 5
+    @Published var fixedModeButtonInterval: Int = 10
+
+    var parsedFixedQuery: ClipQuery? {
+        ClipQueryParser.parse(fixedModeQueryDraft)
+    }
+
+    /// State for the "Repair with Apple Intelligence" affordance in the
+    /// Fixed-mode text input. `.idle` = show button. `.running` = spinner.
+    /// `.repaired(String)` = show "Apply suggestion" CTA. `.failed(String)`
+    /// = show error toast. Read by `ClipView.fixedModeTextInput`.
+    enum RepairState: Equatable {
+        case idle
+        case running
+        case repaired(String)
+        case failed(String)
+    }
+
+    @Published var fixedModeRepairState: RepairState = .idle
+
+    /// Returns true when the Apple Intelligence framework is available
+    /// (iOS 26+). The actual call may still fail at runtime if the user
+    /// hasn't enabled Apple Intelligence or the device isn't eligible —
+    /// we surface that via `RepairState.failed`.
+    var isAppleIntelligenceRepairAvailable: Bool {
+        if #available(iOS 26, *) {
+            return true
+        }
+        return false
+    }
+
+    /// Call `FixedModeQueryRepairer` on the current draft and surface the
+    /// result via `fixedModeRepairState`. Runs on a background-friendly
+    /// task (the repairer is async) and hops back to the main actor to
+    /// publish. No-ops on pre-iOS 26 hardware.
+    func repairFixedModeQuery() {
+        guard #available(iOS 26, *) else {
+            fixedModeRepairState = .failed("Requires iOS 26 or later.")
+            return
+        }
+        let raw = fixedModeQueryDraft
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            fixedModeRepairState = .failed("Type a recipe first.")
+            return
+        }
+        fixedModeRepairState = .running
+        Task { [weak self] in
+            do {
+                let repairer = FixedModeQueryRepairer()
+                guard let repaired = try await repairer.repair(raw) else {
+                    await MainActor.run {
+                        self?.fixedModeRepairState = .failed(
+                            "Couldn't repair that recipe. Try Buttons."
+                        )
+                    }
+                    return
+                }
+                // Sanity: make sure the repair actually parses. If not,
+                // surface a failure rather than letting a broken phrase
+                // sit in the field.
+                if ClipQueryParser.parse(repaired)?.isValid == true {
+                    await MainActor.run {
+                        self?.fixedModeRepairState = .repaired(repaired)
+                    }
+                } else {
+                    await MainActor.run {
+                        self?.fixedModeRepairState = .failed(
+                            "Repaired recipe still doesn't parse."
+                        )
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self?.fixedModeRepairState = .failed(
+                        error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    /// Apply the AI-repaired text into the draft (so the parser runs
+    /// against it and the chips light up). Idempotent.
+    func applyRepairedFixedModeQuery(_ text: String) {
+        fixedModeQueryDraft = text
+        fixedModeRepairState = .idle
+        PolishKit.Haptics.tap(.medium).play()
+    }
+
+    /// Discard the AI suggestion and return to idle.
+    func dismissRepairedFixedModeQuery() {
+        fixedModeRepairState = .idle
+    }
+
+    /// Two-way sync between text input and button input.
+    ///
+    /// Switching from .text to .buttons: pull the parsed values from
+    /// the current text query (if any) so the button view reflects
+    /// what the user already typed.
+    ///
+    /// Switching from .buttons to .text: write the current button
+    /// values back into the text field so users see a phrase they
+    /// can edit. We use a single canonical phrase to avoid drift.
+    func syncFixedModeAcrossStyles(to newStyle: FixedModeInputStyle) {
+        switch (fixedModeInputStyle, newStyle) {
+        case (.text, .buttons):
+            if let parsed = parsedFixedQuery, parsed.isValid {
+                if let c = parsed.count { fixedModeButtonCount = c }
+                if let d = parsed.durationSeconds {
+                    fixedModeButtonDuration = max(1, Int(d.rounded()))
+                }
+                if let i = parsed.intervalSeconds {
+                    fixedModeButtonInterval = max(1, Int(i.rounded()))
+                }
+            }
+        case (.buttons, .text):
+            fixedModeQueryDraft = FixedModeQueryFormatter.phrase(
+                count: fixedModeButtonCount,
+                duration: fixedModeButtonDuration,
+                interval: fixedModeButtonInterval
+            )
+        case (_, _):
+            break
+        }
+    }
+
+    var effectiveFixedQuery: ClipQuery? {
+        switch fixedModeInputStyle {
+        case .text:
+            return parsedFixedQuery
+        case .buttons:
+            return ClipQuery(
+                count: fixedModeButtonCount,
+                durationSeconds: Double(fixedModeButtonDuration),
+                intervalSeconds: Double(fixedModeButtonInterval)
+            )
+        }
+    }
     @Published var processingPhase: ProcessingPhase = .idle
     @Published var progress = 0.0
     @Published var statusMessage = "Choose a video to get started."
@@ -51,8 +248,6 @@ final class VideoSplitterViewModel: ObservableObject {
 
     private let segmenter = VideoSegmenter()
     private let smartCutAnalyzer = SmartCutAnalyzer()
-    private let highlightAnalyzer = HighlightAnalyzer()
-    private let editIntentPlanner = EditIntentPlanner()
     private let previewGenerator = MediaPreviewGenerator()
     private let waveformAnalyzer = WaveformAnalyzer()
     private let tikTokShareService = TikTokDirectShareService()
@@ -61,6 +256,7 @@ final class VideoSplitterViewModel: ObservableObject {
     private let credentialStore = CredentialStore()
     private let exportNotifications: ExportNotificationScheduling
     private let exportBackgroundTasks: ExportBackgroundTaskManaging
+    private var userDefaultsStore: UserDefaultsStore
     private let miniMaxAPIKeyAccount = "minimax-api-key"
     private let exportRetentionInterval: TimeInterval = 7 * 24 * 60 * 60
     private var processingTask: Task<Void, Never>?
@@ -77,9 +273,63 @@ final class VideoSplitterViewModel: ObservableObject {
         self.projectStore = MediaProjectStore(workspace: mediaWorkspace)
         self.exportNotifications = exportNotifications
         self.exportBackgroundTasks = exportBackgroundTasks ?? ExportBackgroundTaskManager.shared
+        let defaults = UserDefaultsStore()
+        self.userDefaultsStore = defaults
+        self.defaultCutMode = defaults.defaultCutMode
+        self.defaultSegmentLength = defaults.defaultSegmentLengthSeconds
         loadProjects()
         cleanupExpiredExports()
         refreshMiniMaxAPIKeyStatus()
+        refreshAIUsagePeriod()
+    }
+
+    /// Sync the active subscription tier. The store calls this whenever its
+    /// `tier` published value changes (purchase, refund, restore).
+    func updateTier(_ tier: SubscriptionStore.Tier) {
+        let previous = currentTier
+        currentTier = tier
+        if previous != tier {
+            // Re-validate the loaded project under the new duration cap;
+            // a project that was valid on Creator (15m) might fail under
+            // Free (5m) if the user downgraded.
+            refreshPlanForCurrentInputs()
+        }
+    }
+
+    /// True when a free-tier user has hit the monthly AI plan cap. Paid
+    /// tiers always return false.
+    var canRunAnotherFreeAIPlan: Bool {
+        if currentTier != .free { return true }
+        refreshAIUsagePeriodIfRollover()
+        return aiPlansThisMonth < MediaProcessingLimits.monthlyFreeAIQuota
+    }
+
+    private func refreshAIUsagePeriod() {
+        let (count, periodStart) = AIUsagePeriodStore.read()
+        aiPlansThisMonth = count
+        currentAITierPeriodStart = periodStart
+        hasReachedFreeAIQuota = count >= MediaProcessingLimits.monthlyFreeAIQuota
+    }
+
+    private func refreshAIUsagePeriodIfRollover() {
+        let startOfMonth = AIUsagePeriodStore.startOfCurrentMonth()
+        if startOfMonth != currentAITierPeriodStart {
+            // New month — reset the counter atomically.
+            AIUsagePeriodStore.write(count: 0, periodStart: startOfMonth)
+            aiPlansThisMonth = 0
+            currentAITierPeriodStart = startOfMonth
+            hasReachedFreeAIQuota = false
+        }
+    }
+
+    /// Increments the AI plan counter and persists it. Call only when an AI
+    /// plan was actually dispatched (not when the user opens the paywall).
+    func recordAIPlanInvocation() {
+        refreshAIUsagePeriodIfRollover()
+        let next = aiPlansThisMonth + 1
+        aiPlansThisMonth = next
+        hasReachedFreeAIQuota = next >= MediaProcessingLimits.monthlyFreeAIQuota
+        AIUsagePeriodStore.write(count: next, periodStart: currentAITierPeriodStart)
     }
 
     var isProcessing: Bool {
@@ -98,11 +348,144 @@ final class VideoSplitterViewModel: ObservableObject {
     }
 
     var currentProjectTitle: String {
+        // Draft wins while the user is editing — otherwise the header would
+        // flicker back to the persisted title between keystrokes.
+        let trimmed = projectTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+
         if let currentProjectID, let project = projects.first(where: { $0.id == currentProjectID }) {
             return project.title
         }
 
         guard let sourceURL else { return "New project" }
+        return Self.defaultProjectTitle(for: sourceURL)
+    }
+
+    /// Default display title for a planned clip at the given index — used as
+    /// the seed when rendering clips and when the user clears their custom
+    /// name (so the fallback path is consistent everywhere).
+    func clipDefaultTitle(for index: Int) -> String {
+        let projectName = currentProjectTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = "Clip \(index + 1)"
+        if projectName.isEmpty || projectName == "New project" {
+            return suffix
+        }
+        return "\(projectName) — \(suffix)"
+    }
+
+    /// Titles aligned to the current `plannedRanges`. Used at export time so
+    /// the on-disk filenames + Photos asset names carry the user's naming
+    /// from the moment the clip is rendered.
+    func clipTitlesForCurrentPlan() -> [String] {
+        plannedRanges.indices.map { clipDefaultTitle(for: $0) }
+    }
+
+    /// Update the current project's title. Empty strings are coerced to the
+    /// source filename fallback so we never persist a blank project row.
+    func updateProjectTitle(_ newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved: String
+        if trimmed.isEmpty {
+            resolved = sourceURL.map { Self.defaultProjectTitle(for: $0) } ?? "Untitled project"
+        } else {
+            resolved = trimmed
+        }
+
+        projectTitleDraft = resolved
+
+        guard currentProjectID != nil else {
+            // No project persisted yet — the next persistCurrentProject() call
+            // will pick up `projectTitleDraft`.
+            statusMessage = "Project renamed to \(resolved)."
+            return
+        }
+
+        applyProjectTitleChange(resolved)
+    }
+
+    /// Rename a single saved clip. Updates the in-memory `clips` array and
+    /// persists the project so the new title round-trips through JSON.
+    func renameClip(_ clipID: UUID, to newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+
+        // Pass the raw trimmed string through — SegmentOutput normalizes again
+        // and `displayTitle` does the "Clip N" fallback at render time.
+        clips[index] = clips[index].withTitle(trimmed)
+        persistCurrentProject()
+        PolishKit.Haptics.selection.play()
+    }
+
+    /// Return a URL that's safe to share via `UIActivityViewController` and
+    /// carries the clip's display title as its filename. If the on-disk file
+    /// already has the right name we just hand it back; otherwise we copy to
+    /// a staging directory so AirDrop / Files / iMessage show the friendly
+    /// name instead of the temp "clip-1.mov" the segmenter wrote.
+    ///
+    /// The staging file lives under the workspace so the standard cleanup
+    /// passes (`cleanupExports`) can reap it later.
+    func shareableURL(for clip: SegmentOutput) -> URL? {
+        let desiredName = FilenameSanitizer.sanitizedFileName(
+            from: clip.displayTitle,
+            fallbackBase: "clip-\(clip.index + 1)",
+            fileExtension: clip.url.pathExtension.isEmpty ? "mov" : clip.url.pathExtension
+        )
+
+        if clip.url.lastPathComponent == desiredName {
+            return clip.url
+        }
+
+        do {
+            try mediaWorkspace.prepareBaseDirectories()
+            let staging = mediaWorkspace.exportsDirectory
+                .appendingPathComponent("Share", isDirectory: true)
+            try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            let destination = FilenameSanitizer.uniqueURL(for: desiredName, in: staging)
+
+            // Overwrite a stale staging file from a previous share of the
+            // same clip — the new export will replace it.
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: clip.url, to: destination)
+            return destination
+        } catch {
+            // If staging fails for any reason, fall back to the live file so
+            // the user can still share — they just lose the nice filename.
+            return clip.url
+        }
+    }
+
+    private func applyProjectTitleChange(_ resolved: String) {
+        guard let projectID = currentProjectID,
+              let index = projects.firstIndex(where: { $0.id == projectID }) else {
+            return
+        }
+
+        var project = projects[index]
+        guard project.title != resolved else { return }
+        project.title = resolved
+        project.updatedAt = Date()
+        projects[index] = project
+
+        do {
+            projects = try projectStore.upsert(project)
+            statusMessage = "Project renamed to \(resolved)."
+        } catch {
+            errorMessage = error.localizedDescription
+            statusMessage = "Could not rename project."
+        }
+    }
+
+    /// Coalesce the draft / existing title / source-filename fallback into a
+    /// single string to write to disk. Draft wins when non-empty so the user's
+    /// in-progress rename doesn't get clobbered by the next auto-persist.
+    private func resolveProjectTitleForPersistence(existingTitle: String?, sourceURL: URL) -> String {
+        let trimmedDraft = projectTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedDraft.isEmpty { return trimmedDraft }
+        if let existingTitle, !existingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return existingTitle
+        }
         return Self.defaultProjectTitle(for: sourceURL)
     }
 
@@ -115,11 +498,40 @@ final class VideoSplitterViewModel: ObservableObject {
         return Self.formatDuration(durationSeconds)
     }
 
+    /// Live feasibility snapshot for the current fixed-mode input. Read from
+    /// the `Expected` panel so the `Expected` integer and the actual clip
+    /// count never disagree.
+    var liveRecipeFeasibility: ClipQuery.Feasibility? {
+        guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 else { return nil }
+        return effectiveFixedQuery?.feasibility(forSourceDuration: durationSeconds)
+    }
+
+    /// True when the user's typed recipe cannot produce a single clip inside
+    /// the current source (source shorter than the requested clip duration).
+    /// Drives both the safety-strip badge and an early guard in `prepareCuts`.
+    var recipeHasNoHeadroom: Bool {
+        guard let feasibility = liveRecipeFeasibility else { return false }
+        return feasibility.achievableCount == 0 && feasibility.requestedCount != nil
+    }
+
     var expectedClipCount: Int? {
         guard let durationSeconds,
               durationSeconds.isFinite,
-              durationSeconds > 0,
-              let parsedSegmentLength,
+              durationSeconds > 0
+        else { return nil }
+
+        // Honour the user's explicit count first. The math function clamps to
+        // what's actually achievable, so we don't need a separate "did the
+        // user ask for too many?" check here — `liveRecipeFeasibility`
+        // surfaces that discrepancy.
+        if let query = effectiveFixedQuery,
+           query.isValid,
+           let requestedCount = query.count,
+           requestedCount > 0 {
+            return query.achievableCount(forSourceDuration: durationSeconds)
+        }
+
+        guard let parsedSegmentLength,
               parsedSegmentLength.isFinite,
               parsedSegmentLength > 0
         else { return nil }
@@ -139,13 +551,29 @@ final class VideoSplitterViewModel: ObservableObject {
         }
 
         guard let expectedClipCount else { return "--" }
+        // Surface the truncation: when the achievable count is less than what
+        // the user asked for, render "achievable of requested" so the panel
+        // and the actual output can never disagree.
+        if let feasibility = liveRecipeFeasibility,
+           let requested = feasibility.requestedCount,
+           requested > 0,
+           feasibility.achievableCount < requested {
+            return "\(feasibility.achievableCount) of \(requested)"
+        }
         return "\(expectedClipCount)"
     }
 
     var parsedSegmentLength: Double? {
+        // Try the per-project text first (set via the Clip recipe slider), then
+        // fall back to the user-configured default from Settings. This way the
+        // safe internal default still works even if `segmentLengthText` was
+        // never set for this project.
         let cleaned = segmentLengthText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = Double(cleaned), value.isFinite, value >= 1 else { return nil }
-        return value
+        if let value = Double(cleaned), value.isFinite, value >= 1 {
+            return value
+        }
+        let fallback = Double(defaultSegmentLength)
+        return fallback.isFinite && fallback >= 1 ? fallback : nil
     }
 
     var hasUnsavedPlan: Bool {
@@ -224,7 +652,8 @@ final class VideoSplitterViewModel: ObservableObject {
             plannedRanges = try Self.fixedRanges(
                 totalDuration: durationSeconds,
                 segmentLength: segmentLength,
-                frameDuration: frameDurationSeconds
+                frameDuration: frameDurationSeconds,
+                tier: currentTier
             )
             statusMessage = "Previewing \(plannedRanges.count) fixed clips."
         } catch {
@@ -258,6 +687,162 @@ final class VideoSplitterViewModel: ObservableObject {
         persistCurrentProject()
     }
 
+    // MARK: Highlight mode (manual) — draft controls
+
+    /// The current draft highlight as a `ClipRange`, or `nil` if the user
+    /// hasn't placed one yet (or has just added it and cleared).
+    var highlightDraft: ClipRange? {
+        guard let start = highlightDraftStart,
+              let total = durationSeconds,
+              total > 0
+        else { return nil }
+        let clampedDuration = max(min(highlightDraftDuration, total - start), 0.1)
+        return ClipRange(startSeconds: start, endSeconds: start + clampedDuration)
+    }
+
+    /// User typed a new clip duration. Mark the duration as manually
+    /// overridden so subsequent edits to `defaultSegmentLength` don't
+    /// trample the user's choice. Does NOT seed `highlightDraftStart`
+    /// — that happens when the user actually taps the timeline, so the
+    /// band only appears once they've chosen a position.
+    func setHighlightDuration(_ seconds: Double) {
+        let cleaned = seconds.isFinite ? max(seconds, 0.5) : 0.5
+        highlightDraftDuration = cleaned
+        hasManualHighlightDuration = true
+    }
+
+    /// Reset the manual-override flag so Highlight duration will follow
+    /// `defaultSegmentLength` again. Called when the user edits
+    /// "Seconds per clip".
+    private func propagateDefaultSegmentLengthToHighlight() {
+        let fallback = Double(defaultSegmentLength)
+        guard fallback.isFinite, fallback >= 0.5 else { return }
+        if !hasManualHighlightDuration {
+            highlightDraftDuration = fallback
+        }
+        // Whether or not we updated Highlight, the user has re-asserted
+        // the fallback — clear the manual flag so future Highlight edits
+        // count as overrides again.
+        hasManualHighlightDuration = false
+    }
+
+    /// Called once when Highlight mode is entered. Seeds the duration
+    /// from the current "Seconds per clip" default and clears any
+    /// stale manual-override flag so the new value takes effect.
+    /// Does NOT seed `highlightDraftStart` — that should only happen
+    /// when the user actually taps the timeline, so the band doesn't
+    /// appear "pre-existing" the moment they enter Highlight mode.
+    func enterHighlightMode() {
+        highlightDraftDuration = Double(defaultSegmentLength)
+        hasManualHighlightDuration = false
+        // Clear any leftover draft from the previous session so the
+        // timeline reads as empty until the user takes action.
+        highlightDraftStart = nil
+    }
+
+    /// Body-drag (slide the band along the timeline). Snaps to frame
+    /// boundaries and clamps to source bounds.
+    func moveHighlightDraft(toStart newStart: Double) {
+        guard let draft = highlightDraft,
+              let total = durationSeconds,
+              total > 0
+        else { return }
+        let width = draft.endSeconds - draft.startSeconds
+        let clamped = min(max(newStart, 0), max(0, total - width))
+        highlightDraftStart = clamped
+    }
+
+    /// Edge-drag (resize by moving the left or right edge). `delta` is in
+    /// seconds; positive widens, negative narrows.
+    func resizeHighlightDraft(leftEdgeDelta delta: Double) {
+        guard highlightDraftStart != nil,
+              let total = durationSeconds,
+              total > 0
+        else { return }
+        let current = highlightDraftDuration
+        let proposed = current + delta
+        let maxAllowed = total - (highlightDraftStart ?? 0)
+        let minAllowed: Double = 0.5
+        highlightDraftDuration = min(max(proposed, minAllowed), maxAllowed)
+    }
+
+    /// Set the draft's start time directly (left-edge drag). The end
+    /// follows, keeping the current duration. Clamped so the band stays
+    /// inside the source and at least 0.5s wide.
+    func setHighlightStart(_ newStart: Double) {
+        guard let total = durationSeconds, total > 0 else { return }
+        let minStart: Double = 0
+        let maxStart = max(0, total - highlightDraftDuration)
+        let clamped = min(max(newStart, minStart), maxStart)
+        highlightDraftStart = clamped
+    }
+
+    /// Set the draft's end time directly (right-edge drag). The start
+    /// stays put, the duration follows. Clamped similarly.
+    func setHighlightEnd(_ newEnd: Double) {
+        guard let total = durationSeconds, total > 0,
+              let start = highlightDraftStart
+        else { return }
+        let minEnd = start + 0.5
+        let maxEnd = total
+        let clampedEnd = min(max(newEnd, minEnd), maxEnd)
+        highlightDraftDuration = clampedEnd - start
+    }
+
+    /// Append the current draft to `plannedRanges` as a new clip. Persists
+    /// and auto-advances the draft start to the end of the just-added clip
+    /// so the user can immediately grab the next segment without
+    /// re-positioning (typical workflow: walk left-to-right slicing the
+    /// video). Tapping "Add" again after the band reaches the end resets
+    /// to 0.
+    func addHighlightDraftToPlan() {
+        guard let total = durationSeconds, total > 0 else {
+            statusMessage = "Pick a video first."
+            return
+        }
+        // No draft yet? Drop one at the current playhead so the user
+        // doesn't have to position it before committing. This is the
+        // happy path: scrub → set duration → add.
+        if highlightDraft == nil {
+            let pos = scrubPositionSeconds.isFinite ? scrubPositionSeconds : 0
+            let width = highlightDraftDuration
+            let start = min(max(pos, 0), max(0, total - width))
+            highlightDraftStart = start
+        }
+        guard let draft = highlightDraft else {
+            statusMessage = "Couldn't place a highlight there."
+            return
+        }
+        let snapped = ClipRangeEditor.updatedRange(
+            draft,
+            totalDuration: total,
+            frameDuration: frameDurationSeconds
+        )
+        plannedRanges.append(snapped)
+        clips = []
+        let nextStart = snapped.endSeconds
+        if nextStart < total - 0.5 {
+            highlightDraftStart = nextStart
+        } else {
+            // Reached the end — clear the draft so the user explicitly
+            // picks the next spot.
+            highlightDraftStart = nil
+        }
+        statusMessage = "Added clip \(plannedRanges.count) to the plan."
+        persistCurrentProject()
+    }
+
+    /// Discard the draft without adding to the plan.
+    func clearHighlightDraft() {
+        highlightDraftStart = nil
+    }
+
+    /// Reset the draft to start at 0 with the current duration. Used when
+    /// switching between modes or when the source video changes.
+    func resetHighlightDraft() {
+        highlightDraftStart = scrubPositionSeconds > 0 ? scrubPositionSeconds : 0
+    }
+
     func movePlannedRange(at index: Int, direction: Int) {
         let updated = ClipRangeEditor.movedRanges(plannedRanges, from: index, direction: direction)
         guard updated != plannedRanges else { return }
@@ -276,6 +861,13 @@ final class VideoSplitterViewModel: ObservableObject {
     }
 
     func shareClipToTikTok(_ clip: SegmentOutput) {
+        // Studio-only feature. Caller should already gate the UI; we double-
+        // check here because the @Published tier may have changed between
+        // render and tap (e.g. a refund landed).
+        guard currentTier == .studio else {
+            errorMessage = "Direct TikTok share is a Studio feature. Upgrade from Settings to enable it."
+            return
+        }
         guard isClipShareable(clip) else {
             errorMessage = "This clip file is no longer available. Export the planned clips again to share it."
             return
@@ -331,6 +923,7 @@ final class VideoSplitterViewModel: ObservableObject {
     func deleteProject(_ project: MediaProject) {
         do {
             projects = try projectStore.deleteProject(id: project.id)
+            thumbnailCache.removeValue(forKey: project.id)
 
             if currentProjectID == project.id {
                 currentProjectID = nil
@@ -342,6 +935,74 @@ final class VideoSplitterViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             statusMessage = "Could not remove project."
+        }
+    }
+
+    /// Rename a project from the library list (Home screen context menu).
+    /// Empty input falls back to the source filename so we never persist a
+    /// blank title. If the project being renamed is also the currently open
+    /// one, the live `projectTitleDraft` is kept in sync so the ClipView
+    /// header text updates immediately.
+    func renameStoredProject(id: UUID, to newTitle: String) {
+        guard let index = projects.firstIndex(where: { $0.id == id }) else { return }
+
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved: String
+        if trimmed.isEmpty {
+            resolved = Self.defaultProjectTitle(for: projects[index].sourceURL)
+        } else {
+            resolved = trimmed
+        }
+
+        guard projects[index].title != resolved else { return }
+
+        var project = projects[index]
+        project.title = resolved
+        project.updatedAt = Date()
+        projects[index] = project
+
+        do {
+            projects = try projectStore.upsert(project)
+            if currentProjectID == id {
+                projectTitleDraft = resolved
+            }
+            statusMessage = "Project renamed to \(resolved)."
+            PolishKit.Haptics.selection.play()
+        } catch {
+            errorMessage = error.localizedDescription
+            statusMessage = "Could not rename project."
+        }
+    }
+
+    func cachedThumbnail(for id: UUID) -> UIImage? {
+        thumbnailCache[id]
+    }
+
+    @MainActor
+    func loadThumbnail(id: UUID, url: URL, midpointSeconds: Double = 0, maximumSize: CGSize = CGSize(width: 320, height: 320)) async {
+        guard thumbnailCache[id] == nil else { return }
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("⚠️ loadThumbnail: source file missing at \(url.path)")
+            return
+        }
+
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = maximumSize
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 0.2, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.2, preferredTimescale: 600)
+
+        let target = CMTime(seconds: midpointSeconds, preferredTimescale: 600)
+
+        do {
+            let (cgImage, _) = try await generator.image(at: target)
+            let image = UIImage(cgImage: cgImage)
+            thumbnailCache[id] = image
+        } catch {
+            print("⚠️ loadThumbnail: image extraction failed for \(id) — \(error.localizedDescription)")
+            return
         }
     }
 
@@ -380,6 +1041,23 @@ final class VideoSplitterViewModel: ObservableObject {
             return
         }
 
+        // Headroom guard: a recipe with explicit count + duration on a source
+        // shorter than one clip should fail loudly, not silently clamp to zero
+        // ranges. Catch it before any work is dispatched.
+        if cutMode == .fixed, recipeHasNoHeadroom,
+           let durationSeconds, durationSeconds > 0 {
+            errorMessage = "Source is shorter than one clip. Trim a clip ≤ \(Int(durationSeconds))s, shorten the source, or switch to Smart Pause / Highlight."
+            statusMessage = "Recipe needs more source than is available."
+            return
+        }
+
+        // Free-tier AI quota gate. Paid tiers have unlimited runs.
+        if cutMode == .aiAssist, currentTier == .free, !canRunAnotherFreeAIPlan {
+            errorMessage = "You've used your \(MediaProcessingLimits.monthlyFreeAIQuota) free AI plans for this month. Upgrade to Creator from Settings to keep going."
+            statusMessage = "Free-tier AI plan quota reached."
+            return
+        }
+
         processingTask?.cancel()
         processingTask = Task { [weak self] in
             guard let self else { return }
@@ -399,24 +1077,38 @@ final class VideoSplitterViewModel: ObservableObject {
                     guard let durationSeconds else {
                         throw VideoSegmenterError.invalidDuration
                     }
-                    ranges = try Self.fixedRanges(
-                        totalDuration: durationSeconds,
-                        segmentLength: segmentLength,
-                        frameDuration: frameDurationSeconds
-                    )
+                    let queryRanges: [ClipRange]? = effectiveFixedQuery.map { q in
+                        ClipQuery(
+                            count: q.count,
+                            durationSeconds: q.durationSeconds,
+                            intervalSeconds: q.intervalSeconds
+                        ).ranges(forSourceDuration: durationSeconds)
+                    }
+                    if let queryRanges, !queryRanges.isEmpty {
+                        // Natural language parsed query takes precedence over the
+                        // numeric stepper when it produces actual cuts.
+                        ranges = queryRanges
+                    } else {
+                        ranges = try Self.fixedRanges(
+                            totalDuration: durationSeconds,
+                            segmentLength: segmentLength,
+                            frameDuration: frameDurationSeconds,
+                            tier: currentTier
+                        )
+                    }
                 case .smartPause:
                     ranges = try await smartCutAnalyzer.ranges(
                         for: sourceURL,
                         fallbackSegmentLength: segmentLength
                     )
                 case .highlight:
-                    let intent = editIntentPlanner.intent(from: editPrompt)
-                    let settings = HighlightAnalyzer.settings(from: intent)
-                    ranges = try await highlightAnalyzer.ranges(
-                        for: sourceURL,
-                        fallbackSegmentLength: segmentLength,
-                        settings: settings
-                    )
+                    // Highlight mode is now fully manual — the user picks
+                    // positions/durations on the timeline themselves. We do
+                    // NOT auto-detect anything here; the planned ranges are
+                    // whatever the user has already added via the "Add to
+                    // plan" affordance. If they haven't added any yet, this
+                    // is a no-op.
+                    ranges = plannedRanges
                 case .aiAssist:
                     ranges = try await miniMaxRanges(
                         for: sourceURL,
@@ -432,7 +1124,7 @@ final class VideoSplitterViewModel: ObservableObject {
                 } else {
                     duration = try await segmenter.duration(for: sourceURL)
                 }
-                try MediaProcessingLimits.validateSourceDuration(duration)
+                try MediaProcessingLimits.validateSourceDuration(duration, for: currentTier)
                 plannedRanges = try MediaProcessingLimits.validatedClipPlan(
                     ranges,
                     totalDuration: duration,
@@ -442,6 +1134,13 @@ final class VideoSplitterViewModel: ObservableObject {
 
                 guard !plannedRanges.isEmpty else {
                     throw VideoSegmenterError.invalidDuration
+                }
+
+                // Count this AI-Assist run against the quota ONLY when the user
+                // doesn't have their own provider key. BYOK users are paying
+                // the provider themselves — we don't count it.
+                if cutMode == .aiAssist, currentTier == .free, !hasMiniMaxAPIKey {
+                    recordAIPlanInvocation()
                 }
 
                 progress = 1
@@ -462,30 +1161,46 @@ final class VideoSplitterViewModel: ObservableObject {
     }
 
     func exportPreparedClips() {
+        // Convenience: if clips are already rendered (re-opening a project), skip
+        // the preview step and save straight to Photos. New exports go through
+        // prepareExport() instead so the user can review first.
+        guard !clips.isEmpty else {
+            prepareExport()
+            return
+        }
+        confirmPendingExport()
+    }
+
+    /// Step 1 of the save flow: render the planned ranges to a temp directory and
+    /// surface the results in a preview sheet. The user must confirm before anything
+    /// touches the photo library.
+    func prepareExport() {
         guard let sourceURL else {
             errorMessage = "Choose a video first."
             return
         }
-
         guard !plannedRanges.isEmpty else {
             errorMessage = "Analyze cuts before exporting."
             return
         }
 
         processingTask?.cancel()
-        processingTask = Task { [weak self] in
+        // Studio priority: schedule the entire render-and-save flow at
+        // `.background` QoS so the system runs us ahead of creator/free
+        // renders, with an extra 30s of background-time grace.
+        let exportPriority = ExportBackgroundTaskManager.exportQoS(for: currentTier)
+        processingTask = Task(priority: exportPriority) { [weak self] in
             guard let self else { return }
 
             processingPhase = .exporting
             progress = 0
-            clips = []
             errorMessage = nil
-            statusMessage = "Exporting clips..."
+            statusMessage = "Rendering clips for preview..."
             let exportProjectTitle = currentProjectTitle
             await exportNotifications.prepareForExportNotifications()
-            exportBackgroundTasks.beginExportTask(named: "ReelClip Export") { [weak self] in
+            exportBackgroundTasks.beginExportTask(named: "ReelClip Preview") { [weak self] in
                 self?.processingTask?.cancel()
-                self?.statusMessage = "Export stopped while the app was in the background."
+                self?.statusMessage = "Preview stopped while the app was in the background."
             }
             defer {
                 exportBackgroundTasks.endExportTask()
@@ -495,41 +1210,34 @@ final class VideoSplitterViewModel: ObservableObject {
                 guard let durationSeconds else {
                     throw VideoSegmenterError.invalidDuration
                 }
-                try MediaProcessingLimits.validateSourceDuration(durationSeconds)
+                try MediaProcessingLimits.validateSourceDuration(durationSeconds, for: currentTier)
                 let safeRanges = try MediaProcessingLimits.validatedClipPlan(
                     plannedRanges,
                     totalDuration: durationSeconds,
                     frameDuration: frameDurationSeconds
                 )
-                let exportedClips = try await segmenter.segmentVideo(
+                let renderedClips = try await segmenter.segmentVideo(
                     sourceURL: sourceURL,
-                    ranges: safeRanges
+                    ranges: safeRanges,
+                    clipTitles: clipTitlesForCurrentPlan(),
+                    tier: currentTier
                 ) { [weak self] value in
                     self?.progress = value
                 }
 
                 try Task.checkCancellation()
 
-                clips = exportedClips
-                processingPhase = .saving
-                statusMessage = "Saving clips to Photos..."
-                let photoLibraryIdentifiers = try await segmenter.saveToPhotoLibrary(exportedClips)
-                clips = exportedClips.map { clip in
-                    clip.withPhotoLibraryLocalIdentifier(photoLibraryIdentifiers[clip.id])
-                }
-                statusMessage = "Saved \(exportedClips.count) clips to Photos. Tap a clip to share."
-                await exportNotifications.notifyExportCompleted(
-                    clipCount: exportedClips.count,
-                    projectTitle: exportProjectTitle
-                )
-                persistCurrentProject()
+                pendingExportClips = renderedClips
+                processingPhase = .idle
+                statusMessage = "Review \(renderedClips.count) clip\(renderedClips.count == 1 ? "" : "s") before saving."
+                isShowingExportPreview = true
             } catch is CancellationError {
-                statusMessage = "Processing cancelled."
+                statusMessage = "Preview cancelled."
             } catch VideoSegmenterError.cancelled {
-                statusMessage = "Processing cancelled."
+                statusMessage = "Preview cancelled."
             } catch {
                 errorMessage = error.localizedDescription
-                statusMessage = "Export stopped."
+                statusMessage = "Could not render clips."
                 await exportNotifications.notifyExportFailed(
                     projectTitle: exportProjectTitle,
                     message: error.localizedDescription
@@ -539,6 +1247,66 @@ final class VideoSplitterViewModel: ObservableObject {
             processingPhase = .idle
             processingTask = nil
         }
+    }
+
+    /// Step 2 of the save flow: commit the rendered clips to the photo library.
+    func confirmPendingExport() {
+        guard let pending = pendingExportClips, !pending.isEmpty else {
+            isShowingExportPreview = false
+            return
+        }
+        let exportProjectTitle = currentProjectTitle
+
+        processingTask?.cancel()
+        processingTask = Task { [weak self] in
+            guard let self else { return }
+
+            processingPhase = .saving
+            statusMessage = "Saving clips to Photos..."
+            isShowingExportPreview = false
+
+            do {
+                let photoLibraryIdentifiers = try await segmenter.saveToPhotoLibrary(pending) { [weak self] value in
+                    self?.progress = value
+                }
+                let saved = pending.map { clip in
+                    clip.withPhotoLibraryLocalIdentifier(photoLibraryIdentifiers[clip.id])
+                }
+                clips = saved
+                pendingExportClips = nil
+                statusMessage = "Saved \(saved.count) clips to Photos. Tap a clip to share."
+                await exportNotifications.notifyExportCompleted(
+                    clipCount: saved.count,
+                    projectTitle: exportProjectTitle
+                )
+                persistCurrentProject()
+            } catch is CancellationError {
+                statusMessage = "Save cancelled."
+            } catch VideoSegmenterError.cancelled {
+                statusMessage = "Save cancelled."
+            } catch {
+                errorMessage = error.localizedDescription
+                statusMessage = "Could not save to Photos."
+                await exportNotifications.notifyExportFailed(
+                    projectTitle: exportProjectTitle,
+                    message: error.localizedDescription
+                )
+            }
+
+            processingPhase = .idle
+            processingTask = nil
+        }
+    }
+
+    /// Step 2 alt: discard the rendered clips without saving.
+    func cancelPendingExport() {
+        if let pending = pendingExportClips, !pending.isEmpty {
+            // Reap the temp files the segmenter produced.
+            mediaWorkspace.removeDirectories(for: pending)
+        }
+        pendingExportClips = nil
+        isShowingExportPreview = false
+        statusMessage = "Preview cancelled."
     }
 
     func cancelProcessing() {
@@ -597,6 +1365,16 @@ final class VideoSplitterViewModel: ObservableObject {
         errorMessage = nil
         isProjectBrowserVisible = false
         statusMessage = "Import source footage."
+
+        // Apply the user's persisted clip defaults so a fresh project starts in the right state.
+        cutMode = defaultCutMode
+        segmentLengthText = "\(defaultSegmentLength)"
+    }
+
+    func resetClipDefaults() {
+        userDefaultsStore.resetAll()
+        defaultCutMode = userDefaultsStore.defaultCutMode
+        defaultSegmentLength = userDefaultsStore.defaultSegmentLengthSeconds
     }
 
     private func cancelPreviewLoading() {
@@ -611,7 +1389,7 @@ final class VideoSplitterViewModel: ObservableObject {
         case .smartPause:
             return "Analyzing audio..."
         case .highlight:
-            return "Scoring highlights..."
+            return "Ready — drag the highlight on the timeline."
         case .aiAssist:
             return "Asking MiniMax..."
         }
@@ -631,7 +1409,12 @@ final class VideoSplitterViewModel: ObservableObject {
                 return
             }
 
-            try await setLoadedVideo(url: video.url)
+            // PhotosPicker hands us a temp file URL the system may purge at any time.
+            // Copy into the persistent workspace so the project's sourcePath stays
+            // valid across launches — otherwise thumbnails + waveform + preview all
+            // break the next time the temp file is reaped.
+            let copiedURL = try mediaWorkspace.importSourceCopy(from: video.url)
+            try await setLoadedVideo(url: copiedURL)
             isProjectBrowserVisible = false
             statusMessage = "Ready to analyze cuts."
         } catch {
@@ -691,12 +1474,22 @@ final class VideoSplitterViewModel: ObservableObject {
         frameDurationSeconds = 1.0 / 30.0
         sourceAspectRatio = 16.0 / 9.0
         clips = []
+        transcriptTask?.cancel()
+        transcriptTask = nil
+        transcript = nil
+        transcriptState = .idle
     }
 
     private func setLoadedVideo(url: URL) async throws {
         sourceURL = url
+        // Seed the editable title with the source filename fallback the first
+        // time a video is imported. The user can rename it inline; an empty
+        // title is coerced to this same fallback at persist time.
+        if projectTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            projectTitleDraft = Self.defaultProjectTitle(for: url)
+        }
         let duration = try await segmenter.duration(for: url)
-        try MediaProcessingLimits.validateSourceDuration(duration)
+        try MediaProcessingLimits.validateSourceDuration(duration, for: currentTier)
         durationSeconds = duration
         frameDurationSeconds = try await frameDuration(for: url)
         sourceAspectRatio = try await aspectRatio(for: url)
@@ -704,6 +1497,38 @@ final class VideoSplitterViewModel: ObservableObject {
         loadWaveform(for: url, durationSeconds: duration)
         refreshPlanForCurrentInputs()
         persistCurrentProject()
+        // New projects don't have a cached transcript — kick off STT now.
+        startTranscriptionIfNeeded(for: url, persistWhenReady: true)
+    }
+
+    /// Run on-device speech-to-text on the given source. If a transcript is
+    /// already cached on the current project, skip the work.
+    private func startTranscriptionIfNeeded(for url: URL, persistWhenReady: Bool) {
+        transcriptTask?.cancel()
+        if let projectID = currentProjectID,
+           let cached = projects.first(where: { $0.id == projectID })?.transcript,
+           !cached.isEmpty {
+            transcript = cached
+            transcriptState = .ready
+            return
+        }
+        transcriptState = .processing
+        transcriptTask = Task { [weak self] in
+            guard let self else { return }
+            let service = TranscriptService()
+            do {
+                let result = try await service.transcribe(audioFileURL: url)
+                if Task.isCancelled { return }
+                self.transcript = result
+                self.transcriptState = .ready
+                if persistWhenReady {
+                    self.persistCurrentProject()
+                }
+            } catch {
+                if Task.isCancelled { return }
+                self.transcriptState = .failed(error.localizedDescription)
+            }
+        }
     }
 
     private func loadProject(_ project: MediaProject) async {
@@ -720,7 +1545,7 @@ final class VideoSplitterViewModel: ObservableObject {
         }
 
         do {
-            try MediaProcessingLimits.validateSourceDuration(project.durationSeconds)
+            try MediaProcessingLimits.validateSourceDuration(project.durationSeconds, for: currentTier)
         } catch {
             processingPhase = .idle
             errorMessage = error.localizedDescription
@@ -730,6 +1555,7 @@ final class VideoSplitterViewModel: ObservableObject {
 
         resetLoadedMediaState(keepSource: false)
         currentProjectID = project.id
+        projectTitleDraft = project.title
         sourceURL = project.sourceURL
         durationSeconds = project.durationSeconds
         cutMode = project.cutMode
@@ -744,6 +1570,15 @@ final class VideoSplitterViewModel: ObservableObject {
         scrubPositionSeconds = Self.clampedSeconds(project.scrubPositionSeconds, duration: project.durationSeconds)
         isProjectBrowserVisible = false
 
+        // Surface any persisted transcript for the project.
+        if let saved = project.transcript, !saved.isEmpty {
+            transcript = saved
+            transcriptState = .ready
+        } else {
+            transcript = nil
+            transcriptState = .idle
+        }
+
         loadPreviews(for: project.sourceURL, durationSeconds: project.durationSeconds)
         loadWaveform(for: project.sourceURL, durationSeconds: project.durationSeconds)
 
@@ -751,7 +1586,7 @@ final class VideoSplitterViewModel: ObservableObject {
         processingPhase = .idle
     }
 
-    private func persistCurrentProject() {
+    func persistCurrentProject() {
         guard let sourceURL, let durationSeconds else { return }
 
         let now = Date()
@@ -759,7 +1594,7 @@ final class VideoSplitterViewModel: ObservableObject {
         let existingProject = projects.first { $0.id == projectID }
         let project = MediaProject(
             id: projectID,
-            title: existingProject?.title ?? Self.defaultProjectTitle(for: sourceURL),
+            title: resolveProjectTitleForPersistence(existingTitle: existingProject?.title, sourceURL: sourceURL),
             sourcePath: sourceURL.standardizedFileURL.path,
             sourceFileName: sourceURL.lastPathComponent,
             durationSeconds: durationSeconds,
@@ -773,6 +1608,7 @@ final class VideoSplitterViewModel: ObservableObject {
                 .filter { isClipShareable($0) }
                 .map(StoredClipOutput.init(clip:)),
             scrubPositionSeconds: Self.clampedSeconds(scrubPositionSeconds, duration: durationSeconds),
+            transcript: transcript,
             createdAt: existingProject?.createdAt ?? now,
             updatedAt: now
         )
@@ -801,6 +1637,91 @@ final class VideoSplitterViewModel: ObservableObject {
         }
     }
 
+    // MARK: - .reelclip project export / import
+    //
+    // Projects are persisted internally in `~/Library/Application Support/`
+    // which iOS wipes on app uninstall. To make projects portable — across
+    // reinstalls, devices, and other users — we expose Export/Import via
+    // the `.reelclip` file type. The file is a small JSON snapshot; the
+    // source video stays in Photos (referenced by PHAsset localIdentifier).
+    //
+    // Export writes to a temp URL the caller hands to UIDocumentPicker in
+    // `.forExporting` mode. Import reads a URL the caller got from the
+    // picker in `.forOpeningContentTypes: [.reelclip]` mode (or from the
+    // Files app via ReelClipProjectURLRouter).
+
+    /// Build a temp file URL containing the current project's `.reelclip`
+    /// snapshot. Caller is expected to hand this URL to a document
+    /// picker for export, then delete the temp file when done.
+    /// Returns nil if there is no active project to export.
+    func exportCurrentProjectToTemporaryFile() throws -> (url: URL, suggestedName: String) {
+        guard let projectID = currentProjectID,
+              let project = projects.first(where: { $0.id == projectID }) else {
+            throw NSError(domain: "VideoSplitterViewModel", code: 100,
+                          userInfo: [NSLocalizedDescriptionKey: "Open or create a project before exporting."])
+        }
+        let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
+        let data = try ReelClipProjectCodec.encode(
+            project,
+            sourceAsset: nil,            // We don't have the PHAsset reference here; the
+                                         // file will rely on `sourceOriginalFilename` only.
+                                         // Future: surface a per-project PHAsset cache.
+            sourceFileSize: nil,
+            appVersion: appVersion
+        )
+        let safeName = sanitizeFilename(from: project.title)
+        let filename = "\(safeName).reelclip"
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        try data.write(to: tempURL, options: [.atomic])
+        return (tempURL, filename)
+    }
+
+    /// Ingest a project produced by either the document-picker Import
+    /// button or the URL router. Stores the project and (if the source
+    /// was resolved) opens it for editing.
+    func setStatusMessage(_ text: String) {
+        statusMessage = text
+    }
+
+    func ingestImportedProject(_ result: ReelClipImportResult) {
+        do {
+            projects = try projectStore.upsert(result.project)
+        } catch {
+            errorMessage = "Couldn't save imported project: \(error.localizedDescription)"
+            return
+        }
+        switch result.sourceResolution {
+        case .resolvedViaPhotos(let url, _),
+             .resolvedViaFilename(let url, _):
+            // Source is ready — open it for editing.
+            currentProjectID = result.project.id
+            openProject(result.project)
+            // The openProject flow expects `sourceURL`; the loadProject
+            // async task re-reads it from `result.project.sourceURL`. We
+            // also clear any leftover source so the UI doesn't double-
+            // render the previous clip.
+            _ = url
+        case .missing:
+            // Source missing — keep the project but don't auto-open.
+            // UI shows a "source missing" banner from the statusMessage
+            // set by the router. The user can re-pick a video to link
+            // the planned ranges.
+            statusMessage = "Imported \"\(result.project.title)\" — pick a replacement video to start editing."
+            currentProjectID = result.project.id
+        }
+    }
+
+    private func sanitizeFilename(from title: String) -> String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = trimmed.isEmpty ? "Untitled" : trimmed
+        // Replace path separators and other unsafe chars with `_`.
+        let allowed = CharacterSet.alphanumerics
+            .union(CharacterSet(charactersIn: "-_ "))
+        return String(cleaned.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" })
+            .prefix(60)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     private func refreshMiniMaxAPIKeyStatus() {
         do {
             hasMiniMaxAPIKey = try credentialStore.read(account: miniMaxAPIKeyAccount) != nil
@@ -810,25 +1731,103 @@ final class VideoSplitterViewModel: ObservableObject {
     }
 
     private func miniMaxRanges(for sourceURL: URL, fallbackSegmentLength: Double) async throws -> [ClipRange] {
-        guard let apiKey = try credentialStore.read(account: miniMaxAPIKeyAccount),
-              !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            hasMiniMaxAPIKey = false
-            throw MiniMaxEditPlannerError.missingAPIKey
-        }
-
         guard let durationSeconds else {
             throw VideoSegmenterError.invalidDuration
         }
 
-        try MediaProcessingLimits.validateSourceDuration(durationSeconds)
+        try MediaProcessingLimits.validateSourceDuration(durationSeconds, for: currentTier)
         let features = try await timelineFeaturePack(
             for: sourceURL,
             durationSeconds: durationSeconds,
             fallbackSegmentLength: fallbackSegmentLength
         )
-        let planner = MiniMaxEditPlanner(apiKey: apiKey)
-        return try await planner.planCuts(prompt: editPrompt, features: features)
+
+        // Resolve the user's selected provider, with a smart fallback to MiniMax
+        // (or whatever else has a key) if the requester isn't available.
+        guard let resolved = AIProviderRegistry.resolvedProvider(
+            for: selectedAIProvider,
+            minimax: MiniMaxEditProvider(planner: MiniMaxEditPlanner(apiKey: ""))
+        ) else {
+            throw NSError(
+                domain: "AIProvider",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "No AI provider is available. Select one in Settings."]
+            )
+        }
+
+        let credential: String?
+        if resolved.provider.id.requiresAPIKey {
+            credential = (try? credentialStore.read(account: resolved.provider.id.keychainAccount))?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if credential?.isEmpty != false {
+                throw providerMissingCredentialError(resolved.provider.id)
+            }
+        } else {
+            credential = nil
+        }
+
+        statusMessage = "Asking \(resolved.provider.displayName)…"
+        do {
+            let ranges = try await resolved.provider.planCuts(
+                prompt: editPrompt,
+                features: features,
+                credential: credential
+            )
+            if let fallbackFrom = resolved.fallbackFrom {
+                statusMessage = "\(resolved.provider.displayName) used as fallback for \(fallbackFrom.displayName)."
+            }
+            return ranges
+        } catch {
+            // Re-raise — caller renders the localised error message.
+            throw error
+        }
+    }
+
+    private func providerMissingCredentialError(_ provider: AIProvider) -> Error {
+        switch provider {
+        case .appleIntelligence:
+            return NSError(
+                domain: "AIProvider",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Apple Intelligence is unavailable on this device."]
+            )
+        case .ollama:
+            return NSError(
+                domain: "AIProvider",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Add an Ollama endpoint URL in Settings."]
+            )
+        default:
+            return NSError(
+                domain: "AIProvider",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Add an API key for \(provider.displayName) in Settings."]
+            )
+        }
+    }
+
+    func hasConfiguredCredential(for provider: AIProvider) -> Bool {
+        guard provider.requiresAPIKey else { return true }
+        let stored = (try? credentialStore.read(account: provider.keychainAccount))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return !(stored?.isEmpty ?? true)
+    }
+
+    func credential(for provider: AIProvider) -> String? {
+        (try? credentialStore.read(account: provider.keychainAccount))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func saveCredential(_ value: String, for provider: AIProvider) throws {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            try credentialStore.delete(account: provider.keychainAccount)
+        } else {
+            try credentialStore.save(trimmed, account: provider.keychainAccount)
+        }
+        if provider == .minimax {
+            hasMiniMaxAPIKey = hasConfiguredCredential(for: .minimax)
+        }
     }
 
     private func timelineFeaturePack(
@@ -852,10 +1851,7 @@ final class VideoSplitterViewModel: ObservableObject {
             samples: samples,
             durationSeconds: durationSeconds
         )
-        let requestedMaxClips = min(
-            editIntentPlanner.intent(from: editPrompt).maxClips,
-            MediaProcessingLimits.maximumPlannedClips
-        )
+        let requestedMaxClips = MediaProcessingLimits.maximumPlannedClips
         let fallbackRanges = Array(
             SmartCutAnalyzer.equalRanges(
                 totalDuration: durationSeconds,
@@ -1023,9 +2019,10 @@ final class VideoSplitterViewModel: ObservableObject {
     private static func fixedRanges(
         totalDuration: Double,
         segmentLength: Double,
-        frameDuration: Double
+        frameDuration: Double,
+        tier: SubscriptionStore.Tier
     ) throws -> [ClipRange] {
-        try MediaProcessingLimits.validateSourceDuration(totalDuration)
+        try MediaProcessingLimits.validateSourceDuration(totalDuration, for: tier)
         let minimumDuration = min(minimumFixedClipDuration(segmentLength: segmentLength), totalDuration)
         let ranges = SmartCutAnalyzer.equalRanges(
             totalDuration: totalDuration,

@@ -52,10 +52,12 @@ final class MiniMaxEditPlanner: AIEditPlanner {
     static let defaultRequestTimeout: TimeInterval = 120
 
     private let apiKey: String
-    private let model: String
-    private let endpoint: URL
-    private let urlSession: URLSession
-    private let requestTimeout: TimeInterval
+    /// Exposed so `MiniMaxEditProvider` can reuse the configured model
+    /// when injecting credentials at call time.
+    let model: String
+    let endpoint: URL
+    let urlSession: URLSession
+    let requestTimeout: TimeInterval
 
     init(
         apiKey: String,

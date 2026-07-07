@@ -127,6 +127,20 @@ struct WaveformAnalyzer {
         let length = CMBlockBufferGetDataLength(blockBuffer)
         guard length > 0 else { return 0 }
 
+        // Verify the sample buffer is actually Float32 PCM before
+        // interpreting raw bytes. If the format doesn't match (e.g.
+        // integer PCM delivered despite our output settings), return 0
+        // instead of producing garbage RMS values.
+        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else {
+            return 0
+        }
+        guard asbd.pointee.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              asbd.pointee.mBitsPerChannel == 32 else {
+            // Not Float32 — can't interpret bytes safely.
+            return 0
+        }
+
         var data = Data(count: length)
         let status = data.withUnsafeMutableBytes { bytes in
             guard let baseAddress = bytes.baseAddress else { return kCMBlockBufferBadPointerParameterErr }

@@ -29,4 +29,23 @@ final class ExportBackgroundTaskManager: ExportBackgroundTaskManaging {
         UIApplication.shared.endBackgroundTask(taskIdentifier)
         taskIdentifier = .invalid
     }
+
+    // MARK: - Studio priority hint
+
+    /// Returns the QoS class that should be used to dispatch the export
+    /// `Task` for the given subscription tier. Studio gets `.userInitiated`
+    /// (high priority) so the system scheduler promotes it ahead of Free/Creator
+    /// exports. Free and Creator use `.utility` so they yield to Studio renders
+    /// during multi-render batches.
+    ///
+    /// Note: `TaskPriority.background` is the *lowest* priority in Swift's
+    /// enum ordering (`.background < .utility < .medium < .userInitiated <
+    /// .userInteractive`), not the highest — the previous code inverted the
+    /// intent and deprioritized Studio exports.
+    static func exportQoS(for tier: SubscriptionStore.Tier) -> TaskPriority {
+        switch tier {
+        case .studio:  return .userInitiated
+        case .creator, .free: return .utility
+        }
+    }
 }
