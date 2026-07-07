@@ -8,20 +8,52 @@
 
 /* Begin PBXBuildFile section */
 		1A2B3C4D5E6F700000000001 /* VideoSlicerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000011 /* VideoSlicerApp.swift */; };
-		1A2B3C4D5E6F700000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000012 /* ContentView.swift */; };
+		1A2B3C4D5E6F7000000000A1 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000A0 /* AppTheme.swift */; };
+		1A2B3C4D5E6F7000000000A3 /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000A2 /* ShareSheet.swift */; };
+		1A2B3C4D5E6F7000000000A5 /* WaveformStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000A4 /* WaveformStrip.swift */; };
+		1A2B3C4D5E6F7000000000A7 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000A6 /* HomeView.swift */; };
+		1A2B3C4D5E6F7000000000A9 /* ClipView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000A8 /* ClipView.swift */; };
+		1A2B3C4D5E6F7000000000AB /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000AA /* SettingsView.swift */; };
+		1A2B3C4D5E6F7000000000AD /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000AC /* RootView.swift */; };
+		1A2B3C4D5E6F7000000000AF /* VideoThumbnailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000AE /* VideoThumbnailView.swift */; };
+		1A2B3C4D5E6F7000000000B1 /* UserDefaultsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000B0 /* UserDefaultsStore.swift */; };
+		1A2B3C4D5E6F7000000000B3 /* ClipQuery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000B2 /* ClipQuery.swift */; };
+		1A2B3C4D5E6F7000000000B5 /* ExportPreviewSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000B4 /* ExportPreviewSheet.swift */; };
+		1A2B3C4D5E6F7000000000C5 /* AIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000C4 /* AIProvider.swift */; };
+		1A2B3C4D5E6F7000000000B9 /* AppleIntelligenceEditProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000B8 /* AppleIntelligenceEditProvider.swift */; };
+		1A2B3C4D5E6F7000000000BB /* MiniMaxEditProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000BA /* MiniMaxEditProvider.swift */; };
+		1A2B3C4D5E6F7000000000BD /* ClaudeEditProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000BC /* ClaudeEditProvider.swift */; };
+		1A2B3C4D5E6F7000000000BF /* OpenAIEditProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000BE /* OpenAIEditProvider.swift */; };
+		1A2B3C4D5E6F7000000000C1 /* GeminiEditProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000C0 /* GeminiEditProvider.swift */; };
+		1A2B3C4D5E6F7000000000C3 /* AIProviderRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000C2 /* AIProviderRegistry.swift */; };
+		1A2B3C4D5E6F7000000000C7 /* Transcript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000C6 /* Transcript.swift */; };
+		1A2B3C4D5E6F7000000000B7 /* TranscriptService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000B6 /* TranscriptService.swift */; };
+		1A2B3C4D5E6F7000000000C9 /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000C8 /* TranscriptView.swift */; };
 		1A2B3C4D5E6F700000000003 /* VideoSplitterViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000013 /* VideoSplitterViewModel.swift */; };
 		1A2B3C4D5E6F700000000004 /* VideoSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000014 /* VideoSegmenter.swift */; };
+		1A2B3C4D5E6F7000000000E1 /* FilenameSanitizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000E2 /* FilenameSanitizer.swift */; };
+		1A2B3C4D5E6F7000000000E5 /* FixedModeQueryRepairer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000E6 /* FixedModeQueryRepairer.swift */; };
+		1A2B3C4D5E6F7000000000F1 /* ReelClipProjectFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F2 /* ReelClipProjectFile.swift */; };
+		1A2B3C4D5E6F7000000000F3 /* ReelClipProjectCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F4 /* ReelClipProjectCodec.swift */; };
+		1A2B3C4D5E6F7000000000F5 /* ReelClipProjectURLRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F6 /* ReelClipProjectURLRouter.swift */; };
+		1A2B3C4D5E6F7000000000F7 /* ReelClipProjectDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F8 /* ReelClipProjectDocument.swift */; };
 		1A2B3C4D5E6F700000000005 /* PickedVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000015 /* PickedVideo.swift */; };
 		1A2B3C4D5E6F700000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000016 /* Assets.xcassets */; };
 		1A2B3C4D5E6F700000000007 /* VideoSegmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000018 /* VideoSegmenterTests.swift */; };
 		1A2B3C4D5E6F700000000009 /* SmartCutAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001A /* SmartCutAnalyzer.swift */; };
-		1A2B3C4D5E6F70000000000A /* HighlightAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001B /* HighlightAnalyzer.swift */; };
-		1A2B3C4D5E6F70000000000B /* EditIntentPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001C /* EditIntentPlanner.swift */; };
-		1A2B3C4D5E6F70000000000C /* CoreMLHighlightScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001D /* CoreMLHighlightScorer.swift */; };
+		1A2B3C4D5E6F7000000000CA /* SubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000CB /* SubscriptionStore.swift */; };
+		1A2B3C4D5E6F7000000000CC /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000CD /* PaywallView.swift */; };
+		1A2B3C4D5E6F7000000000E3 /* ConvexEntitlementClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000E4 /* ConvexEntitlementClient.swift */; };
+		1A2B3C4D5E6F7000000000CE /* EntitlementGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000CF /* EntitlementGate.swift */; };
+		1A2B3C4D5E6F7000000000D2 /* WatermarkRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000D3 /* WatermarkRenderer.swift */; };
+		1A2B3C4D5E6F7000000000D4 /* AIUsagePeriodStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000D5 /* AIUsagePeriodStore.swift */; };
+		1A2B3C4D5E6F7000000000D6 /* PolishKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000D7 /* PolishKit.swift */; };
+		1A2B3C4D5E6F7000000000D9 /* PreviewVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000D8 /* PreviewVideoView.swift */; };
 		1A2B3C4D5E6F70000000000D /* AIFeatureReadiness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001E /* AIFeatureReadiness.swift */; };
 		1A2B3C4D5E6F70000000000E /* MediaWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001F /* MediaWorkspace.swift */; };
 		1A2B3C4D5E6F70000000000F /* MediaPreviewGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */; };
 		1A2B3C4D5E6F700000000023 /* ClipRangeEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000025 /* ClipRangeEditor.swift */; };
+		1A2B3C4D5E6F7000000000D0 /* ReelClip.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000D1 /* ReelClip.storekit */; };
 		1A2B3C4D5E6F700000000024 /* WaveformAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000026 /* WaveformAnalyzer.swift */; };
 		1A2B3C4D5E6F700000000027 /* MediaProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000028 /* MediaProjectStore.swift */; };
 		1A2B3C4D5E6F700000000029 /* MiniMaxEditPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000002A /* MiniMaxEditPlanner.swift */; };
@@ -47,19 +79,51 @@
 /* Begin PBXFileReference section */
 		1A2B3C4D5E6F700000000010 /* VideoSlicer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VideoSlicer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A2B3C4D5E6F700000000011 /* VideoSlicerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoSlicerApp.swift; sourceTree = "<group>"; };
-		1A2B3C4D5E6F700000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000A0 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/AppTheme.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000A2 /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ShareSheet.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000A4 /* WaveformStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/WaveformStrip.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000A6 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/HomeView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000A8 /* ClipView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ClipView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000AA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/SettingsView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000AC /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/RootView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000AE /* VideoThumbnailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/VideoThumbnailView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000B0 /* UserDefaultsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserDefaultsStore.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000B2 /* ClipQuery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipQuery.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000B4 /* ExportPreviewSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/ExportPreviewSheet.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000C4 /* AIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvider.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000B8 /* AppleIntelligenceEditProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleIntelligenceEditProvider.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000BA /* MiniMaxEditProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MiniMaxEditProvider.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000BC /* ClaudeEditProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeEditProvider.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000BE /* OpenAIEditProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIEditProvider.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000C0 /* GeminiEditProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiEditProvider.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000C2 /* AIProviderRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProviderRegistry.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000C6 /* Transcript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transcript.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000B6 /* TranscriptService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptService.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000C8 /* TranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/TranscriptView.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000013 /* VideoSplitterViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoSplitterViewModel.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000014 /* VideoSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoSegmenter.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000E2 /* FilenameSanitizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilenameSanitizer.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000E6 /* FixedModeQueryRepairer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixedModeQueryRepairer.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000F2 /* ReelClipProjectFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelClipProjectFile.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000F4 /* ReelClipProjectCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelClipProjectCodec.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000F6 /* ReelClipProjectURLRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelClipProjectURLRouter.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000F8 /* ReelClipProjectDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReelClipProjectDocument.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000015 /* PickedVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickedVideo.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000016 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000017 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000018 /* VideoSegmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoSegmenterTests.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000019 /* VideoSlicerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VideoSlicerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A2B3C4D5E6F70000000001A /* SmartCutAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartCutAnalyzer.swift; sourceTree = "<group>"; };
-		1A2B3C4D5E6F70000000001B /* HighlightAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightAnalyzer.swift; sourceTree = "<group>"; };
-		1A2B3C4D5E6F70000000001C /* EditIntentPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditIntentPlanner.swift; sourceTree = "<group>"; };
-		1A2B3C4D5E6F70000000001D /* CoreMLHighlightScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreMLHighlightScorer.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70000000001E /* AIFeatureReadiness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIFeatureReadiness.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000CB /* SubscriptionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Subscription/SubscriptionStore.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000CD /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Subscription/PaywallView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000E4 /* ConvexEntitlementClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Subscription/ConvexEntitlementClient.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000CF /* EntitlementGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Subscription/EntitlementGate.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000D3 /* WatermarkRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatermarkRenderer.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000D5 /* AIUsagePeriodStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIUsagePeriodStore.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000D7 /* PolishKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PolishKit.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000D8 /* PreviewVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PreviewVideoView.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F7000000000D1 /* ReelClip.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = ReelClip.storekit; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70000000001F /* MediaWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaWorkspace.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreviewGenerator.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000025 /* ClipRangeEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipRangeEditor.swift; sourceTree = "<group>"; };
@@ -106,9 +170,35 @@
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F700000000011 /* VideoSlicerApp.swift */,
-				1A2B3C4D5E6F700000000012 /* ContentView.swift */,
+				1A2B3C4D5E6F7000000000A0 /* AppTheme.swift */,
+				1A2B3C4D5E6F7000000000A2 /* ShareSheet.swift */,
+				1A2B3C4D5E6F7000000000A4 /* WaveformStrip.swift */,
+				1A2B3C4D5E6F7000000000A6 /* HomeView.swift */,
+				1A2B3C4D5E6F7000000000A8 /* ClipView.swift */,
+				1A2B3C4D5E6F7000000000AA /* SettingsView.swift */,
+				1A2B3C4D5E6F7000000000AC /* RootView.swift */,
+				1A2B3C4D5E6F7000000000AE /* VideoThumbnailView.swift */,
+				1A2B3C4D5E6F7000000000B0 /* UserDefaultsStore.swift */,
+				1A2B3C4D5E6F7000000000B2 /* ClipQuery.swift */,
+				1A2B3C4D5E6F7000000000B4 /* ExportPreviewSheet.swift */,
+				1A2B3C4D5E6F7000000000C4 /* AIProvider.swift */,
+				1A2B3C4D5E6F7000000000B8 /* AppleIntelligenceEditProvider.swift */,
+				1A2B3C4D5E6F7000000000BA /* MiniMaxEditProvider.swift */,
+				1A2B3C4D5E6F7000000000BC /* ClaudeEditProvider.swift */,
+				1A2B3C4D5E6F7000000000BE /* OpenAIEditProvider.swift */,
+				1A2B3C4D5E6F7000000000C0 /* GeminiEditProvider.swift */,
+				1A2B3C4D5E6F7000000000C2 /* AIProviderRegistry.swift */,
+				1A2B3C4D5E6F7000000000C6 /* Transcript.swift */,
+				1A2B3C4D5E6F7000000000B6 /* TranscriptService.swift */,
+				1A2B3C4D5E6F7000000000C8 /* TranscriptView.swift */,
 				1A2B3C4D5E6F700000000013 /* VideoSplitterViewModel.swift */,
 				1A2B3C4D5E6F700000000014 /* VideoSegmenter.swift */,
+				1A2B3C4D5E6F7000000000E2 /* FilenameSanitizer.swift */,
+				1A2B3C4D5E6F7000000000E6 /* FixedModeQueryRepairer.swift */,
+				1A2B3C4D5E6F7000000000F2 /* ReelClipProjectFile.swift */,
+				1A2B3C4D5E6F7000000000F4 /* ReelClipProjectCodec.swift */,
+				1A2B3C4D5E6F7000000000F6 /* ReelClipProjectURLRouter.swift */,
+				1A2B3C4D5E6F7000000000F8 /* ReelClipProjectDocument.swift */,
 					1A2B3C4D5E6F700000000025 /* ClipRangeEditor.swift */,
 					1A2B3C4D5E6F70000000001F /* MediaWorkspace.swift */,
 					1A2B3C4D5E6F700000000028 /* MediaProjectStore.swift */,
@@ -116,9 +206,6 @@
 					1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */,
 					1A2B3C4D5E6F700000000026 /* WaveformAnalyzer.swift */,
 					1A2B3C4D5E6F70000000001A /* SmartCutAnalyzer.swift */,
-					1A2B3C4D5E6F70000000001B /* HighlightAnalyzer.swift */,
-					1A2B3C4D5E6F70000000001D /* CoreMLHighlightScorer.swift */,
-					1A2B3C4D5E6F70000000001C /* EditIntentPlanner.swift */,
 					1A2B3C4D5E6F70000000002A /* MiniMaxEditPlanner.swift */,
 					1A2B3C4D5E6F70000000002C /* CredentialStore.swift */,
 					1A2B3C4D5E6F700000000035 /* ExportNotificationManager.swift */,
@@ -128,6 +215,15 @@
 				1A2B3C4D5E6F700000000015 /* PickedVideo.swift */,
 				1A2B3C4D5E6F700000000016 /* Assets.xcassets */,
 				1A2B3C4D5E6F700000000017 /* Info.plist */,
+				1A2B3C4D5E6F7000000000CB /* SubscriptionStore.swift */,
+				1A2B3C4D5E6F7000000000CD /* PaywallView.swift */,
+				1A2B3C4D5E6F7000000000E4 /* ConvexEntitlementClient.swift */,
+				1A2B3C4D5E6F7000000000CF /* EntitlementGate.swift */,
+				1A2B3C4D5E6F7000000000D1 /* ReelClip.storekit */,
+				1A2B3C4D5E6F7000000000D3 /* WatermarkRenderer.swift */,
+				1A2B3C4D5E6F7000000000D5 /* AIUsagePeriodStore.swift */,
+				1A2B3C4D5E6F7000000000D7 /* PolishKit.swift */,
+				1A2B3C4D5E6F7000000000D8 /* PreviewVideoView.swift */,
 			);
 			path = VideoSlicer;
 			sourceTree = "<group>";
@@ -239,6 +335,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A2B3C4D5E6F700000000006 /* Assets.xcassets in Resources */,
+				1A2B3C4D5E6F7000000000D0 /* ReelClip.storekit in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -257,9 +354,35 @@
 			buildActionMask = 2147483647;
 			files = (
 				1A2B3C4D5E6F700000000001 /* VideoSlicerApp.swift in Sources */,
-				1A2B3C4D5E6F700000000002 /* ContentView.swift in Sources */,
+				1A2B3C4D5E6F7000000000A1 /* AppTheme.swift in Sources */,
+				1A2B3C4D5E6F7000000000A3 /* ShareSheet.swift in Sources */,
+				1A2B3C4D5E6F7000000000A5 /* WaveformStrip.swift in Sources */,
+				1A2B3C4D5E6F7000000000A7 /* HomeView.swift in Sources */,
+				1A2B3C4D5E6F7000000000A9 /* ClipView.swift in Sources */,
+				1A2B3C4D5E6F7000000000AB /* SettingsView.swift in Sources */,
+				1A2B3C4D5E6F7000000000AD /* RootView.swift in Sources */,
+				1A2B3C4D5E6F7000000000AF /* VideoThumbnailView.swift in Sources */,
+				1A2B3C4D5E6F7000000000B1 /* UserDefaultsStore.swift in Sources */,
+				1A2B3C4D5E6F7000000000B3 /* ClipQuery.swift in Sources */,
+				1A2B3C4D5E6F7000000000B5 /* ExportPreviewSheet.swift in Sources */,
+				1A2B3C4D5E6F7000000000C5 /* AIProvider.swift in Sources */,
+				1A2B3C4D5E6F7000000000B9 /* AppleIntelligenceEditProvider.swift in Sources */,
+				1A2B3C4D5E6F7000000000BB /* MiniMaxEditProvider.swift in Sources */,
+				1A2B3C4D5E6F7000000000BD /* ClaudeEditProvider.swift in Sources */,
+				1A2B3C4D5E6F7000000000BF /* OpenAIEditProvider.swift in Sources */,
+				1A2B3C4D5E6F7000000000C1 /* GeminiEditProvider.swift in Sources */,
+				1A2B3C4D5E6F7000000000C3 /* AIProviderRegistry.swift in Sources */,
+				1A2B3C4D5E6F7000000000C7 /* Transcript.swift in Sources */,
+				1A2B3C4D5E6F7000000000B7 /* TranscriptService.swift in Sources */,
+				1A2B3C4D5E6F7000000000C9 /* TranscriptView.swift in Sources */,
 				1A2B3C4D5E6F700000000003 /* VideoSplitterViewModel.swift in Sources */,
 				1A2B3C4D5E6F700000000004 /* VideoSegmenter.swift in Sources */,
+				1A2B3C4D5E6F7000000000E1 /* FilenameSanitizer.swift in Sources */,
+				1A2B3C4D5E6F7000000000E5 /* FixedModeQueryRepairer.swift in Sources */,
+				1A2B3C4D5E6F7000000000F1 /* ReelClipProjectFile.swift in Sources */,
+				1A2B3C4D5E6F7000000000F3 /* ReelClipProjectCodec.swift in Sources */,
+				1A2B3C4D5E6F7000000000F5 /* ReelClipProjectURLRouter.swift in Sources */,
+				1A2B3C4D5E6F7000000000F7 /* ReelClipProjectDocument.swift in Sources */,
 					1A2B3C4D5E6F700000000023 /* ClipRangeEditor.swift in Sources */,
 					1A2B3C4D5E6F70000000000E /* MediaWorkspace.swift in Sources */,
 					1A2B3C4D5E6F700000000027 /* MediaProjectStore.swift in Sources */,
@@ -267,16 +390,20 @@
 					1A2B3C4D5E6F70000000000F /* MediaPreviewGenerator.swift in Sources */,
 					1A2B3C4D5E6F700000000024 /* WaveformAnalyzer.swift in Sources */,
 					1A2B3C4D5E6F700000000009 /* SmartCutAnalyzer.swift in Sources */,
-					1A2B3C4D5E6F70000000000A /* HighlightAnalyzer.swift in Sources */,
-					1A2B3C4D5E6F70000000000C /* CoreMLHighlightScorer.swift in Sources */,
-					1A2B3C4D5E6F70000000000B /* EditIntentPlanner.swift in Sources */,
 					1A2B3C4D5E6F700000000029 /* MiniMaxEditPlanner.swift in Sources */,
 					1A2B3C4D5E6F70000000002B /* CredentialStore.swift in Sources */,
 					1A2B3C4D5E6F700000000034 /* ExportNotificationManager.swift in Sources */,
 					1A2B3C4D5E6F700000000036 /* ExportBackgroundTaskManager.swift in Sources */,
 					1A2B3C4D5E6F700000000038 /* TikTokDirectShareService.swift in Sources */,
-					1A2B3C4D5E6F70000000000D /* AIFeatureReadiness.swift in Sources */,
 				1A2B3C4D5E6F700000000005 /* PickedVideo.swift in Sources */,
+				1A2B3C4D5E6F7000000000CA /* SubscriptionStore.swift in Sources */,
+				1A2B3C4D5E6F7000000000CC /* PaywallView.swift in Sources */,
+				1A2B3C4D5E6F7000000000E3 /* ConvexEntitlementClient.swift in Sources */,
+				1A2B3C4D5E6F7000000000CE /* EntitlementGate.swift in Sources */,
+				1A2B3C4D5E6F7000000000D2 /* WatermarkRenderer.swift in Sources */,
+				1A2B3C4D5E6F7000000000D4 /* AIUsagePeriodStore.swift in Sources */,
+				1A2B3C4D5E6F7000000000D6 /* PolishKit.swift in Sources */,
+				1A2B3C4D5E6F7000000000D9 /* PreviewVideoView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -421,7 +548,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = 7JSY6J5R99;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VideoSlicer/Info.plist;
@@ -431,7 +558,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.judeokun.VideoSlicer;
+				PRODUCT_BUNDLE_IDENTIFIER = app.reelclip.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -449,7 +576,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = 7JSY6J5R99;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VideoSlicer/Info.plist;
@@ -459,7 +586,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.judeokun.VideoSlicer;
+				PRODUCT_BUNDLE_IDENTIFIER = app.reelclip.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -479,7 +606,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = 7JSY6J5R99;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -505,7 +632,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 33;
 				DEVELOPMENT_TEAM = 7JSY6J5R99;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
