@@ -32,11 +32,26 @@ struct SegmentOutput: Identifiable, Equatable {
         self.photoLibraryLocalIdentifier = photoLibraryLocalIdentifier
     }
 
-    /// Display title for this clip. Falls back to "Clip N" when the stored
+    /// Display title for this clip. Falls back to "Clip 01" when the stored
     /// title is empty so the UI never shows a blank row.
     var displayTitle: String {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Clip \(index + 1)" : trimmed
+        return trimmed.isEmpty ? Self.defaultTitle(for: index) : trimmed
+    }
+
+    static func defaultTitle(for index: Int, totalCount: Int? = nil) -> String {
+        "Clip \(paddedClipNumber(for: index, totalCount: totalCount))"
+    }
+
+    static func defaultFileBase(for index: Int, totalCount: Int? = nil) -> String {
+        "clip-\(paddedClipNumber(for: index, totalCount: totalCount))"
+    }
+
+    private static func paddedClipNumber(for index: Int, totalCount: Int? = nil) -> String {
+        let displayIndex = max(0, index) + 1
+        let largestIndex = max(displayIndex, totalCount ?? displayIndex)
+        let width = max(2, String(largestIndex).count)
+        return String(format: "%0*d", width, displayIndex)
     }
 
     var timeRangeLabel: String {
@@ -182,7 +197,7 @@ struct VideoSegmenter {
             try Task.checkCancellation()
 
             // If the caller passed a title for this index, use it; otherwise
-            // let SegmentOutput fall back to "Clip N" via displayTitle. We pass
+            // let SegmentOutput fall back to "Clip 01" via displayTitle. We pass
             // nil here (not the fallback) so an empty user-cleared title
             // survives the round-trip — the fallback is purely a render concern.
             let rawTitle = clipTitles.flatMap { $0.indices.contains(index) ? $0[index] : nil }
@@ -243,7 +258,6 @@ struct VideoSegmenter {
         }
 
         let identifierCollector = PhotoLibraryIdentifierCollector()
-        let total = max(clips.count, 1)
 
         // Indicate "queueing in PhotoKit" — this is honest: performChanges
         // commits the batch atomically and only THEN does Photos start writing
@@ -252,21 +266,21 @@ struct VideoSegmenter {
         await progress(0.10)
 
         try await PHPhotoLibrary.shared().performChanges {
-            for (index, clip) in clips.enumerated() {
+            for clip in clips {
                 if Task.isCancelled { return }
 
                 let request = PHAssetCreationRequest.forAsset()
 
                 // Surface the user's clip title as the asset's original filename
-                // so it shows up in Photos as "Surf Reel — Clip 1.mov" instead of
-                // the temp filename "clip-1.mov". We sanitize to Photos-safe
-                // characters and fall back to "clip-N" if the title is empty.
+                // so it shows up in Photos as "Surf Reel - Clip 01.mov" instead of
+                // the generated fallback filename. We sanitize to Photos-safe
+                // characters and fall back to "clip-01" if sanitizing empties it.
                 let assetOptions = PHAssetResourceCreationOptions()
                 let baseName = clip.displayTitle
-                let fallback = "clip-\(index + 1)"
+                let fallback = SegmentOutput.defaultFileBase(for: clip.index)
                 let fileExtension = clip.url.pathExtension.isEmpty ? "mov" : clip.url.pathExtension
                 assetOptions.originalFilename = FilenameSanitizer.sanitizedFileName(
-                    from: baseName == "Clip \(index + 1)" ? fallback : baseName,
+                    from: baseName,
                     fallbackBase: fallback,
                     fileExtension: fileExtension
                 )
@@ -342,11 +356,11 @@ struct VideoSegmenter {
         let outputFileType: AVFileType = exportSession.supportedFileTypes.contains(.mp4) ? .mp4 : .mov
         let fileExtension = outputFileType == .mp4 ? "mp4" : "mov"
 
-        // Derive the on-disk filename from the clip title (e.g. "Surf Reel —
-        // Clip 1.mp4"). Falls back to "clip-N" if no title was provided.
+        // Derive the on-disk filename from the clip title (e.g. "Surf Reel -
+        // Clip 01.mp4"). Falls back to "clip-01" if no title was provided.
         // uniqueURL adds " (2)", " (3)"… if the file already exists so re-
         // exports of the same project don't silently overwrite the previous run.
-        let fallbackBase = "clip-\(index + 1)"
+        let fallbackBase = SegmentOutput.defaultFileBase(for: index)
         let titleForNaming: String = {
             guard let clipTitle else { return fallbackBase }
             let trimmed = clipTitle.trimmingCharacters(in: .whitespacesAndNewlines)

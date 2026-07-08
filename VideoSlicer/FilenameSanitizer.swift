@@ -27,6 +27,7 @@ enum FilenameSanitizer {
             .replacingOccurrences(of: "  +", with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if collapsed.isEmpty { return fallback }
 
@@ -47,9 +48,12 @@ enum FilenameSanitizer {
             let charBytes = String(char).utf8.count
             if byteCount + charBytes > maxBytes { break }
             byteCount += charBytes
-            cutIndex = index
+            cutIndex = precomposed.index(after: index)
         }
-        let trimmed = String(precomposed[precomposed.startIndex...cutIndex])
+        let trimmed = String(precomposed[..<cutIndex])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
     }
 

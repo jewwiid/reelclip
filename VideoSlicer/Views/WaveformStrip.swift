@@ -20,6 +20,7 @@ struct WaveformStrip: View {
     /// handles. When non-empty, dragging either edge of a planned range or
     /// the draft highlight shows a small frame preview above the handle.
     var thumbnails: [MediaThumbnail] = []
+    var stripHeight: CGFloat = 52
 
     var body: some View {
         GeometryReader { proxy in
@@ -68,7 +69,7 @@ struct WaveformStrip: View {
                     }
             )
         }
-        .frame(height: 52)
+        .frame(height: stripHeight)
         .background(AppPalette.mediaWell, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -171,6 +172,21 @@ struct WaveformStrip: View {
                     context.stroke(line, with: .color(AppPalette.accent), lineWidth: 1.5)
                 }
 
+                drawRangeBoundaryMarker(
+                    context: context,
+                    size: size,
+                    xPosition: startX,
+                    color: AppPalette.success,
+                    isSelected: isSelected
+                )
+                drawRangeBoundaryMarker(
+                    context: context,
+                    size: size,
+                    xPosition: endX,
+                    color: AppPalette.danger,
+                    isSelected: isSelected
+                )
+
                 // Clip number badge near the top-left of each range.
                 if width > 28 {
                     let label = "\(index + 1)"
@@ -211,6 +227,43 @@ struct WaveformStrip: View {
                 with: .color(AppPalette.accent)
             )
         }
+    }
+
+    private func drawRangeBoundaryMarker(
+        context: GraphicsContext,
+        size: CGSize,
+        xPosition: CGFloat,
+        color: Color,
+        isSelected: Bool
+    ) {
+        guard size.width > 0, size.height > 0, xPosition.isFinite else { return }
+
+        let lineWidth: CGFloat = isSelected ? 2.4 : 1.6
+        let radius: CGFloat = isSelected ? 4.5 : 3.5
+        let x = min(max(xPosition, radius), max(radius, size.width - radius))
+        var line = Path()
+        line.move(to: CGPoint(x: x, y: 0))
+        line.addLine(to: CGPoint(x: x, y: size.height))
+        context.stroke(
+            line,
+            with: .color(color.opacity(isSelected ? 0.95 : 0.78)),
+            lineWidth: lineWidth
+        )
+
+        let topDotRect = CGRect(
+            x: x - radius,
+            y: 3,
+            width: radius * 2,
+            height: radius * 2
+        )
+        let bottomDotRect = CGRect(
+            x: x - radius,
+            y: max(3, size.height - (radius * 2) - 3),
+            width: radius * 2,
+            height: radius * 2
+        )
+        context.fill(Path(ellipseIn: topDotRect), with: .color(color))
+        context.fill(Path(ellipseIn: bottomDotRect), with: .color(color))
     }
 
     private func scrub(at xPosition: CGFloat, width: CGFloat) {
@@ -315,11 +368,14 @@ struct RangeInteractionView: View {
     //   • minWidthForHandles raised to 50 so we don't show handles on
     //     sub-second ranges where they're useless
     //   • body gets its own drag gesture (slide whole range) — was tap-only
-    private let handleVisibleWidth: CGFloat = 8
-    private let handleHeight: CGFloat = 24
-    private let handleOutsidePadding: CGFloat = 12
-    private let handleInsidePadding: CGFloat = 6
-    private let minWidthForHandles: CGFloat = 50
+    // Slimmer than the previous 8×24: 5pt visible width × 18pt tall
+    // feels closer to a native iOS scrubber handle and reads as "thin
+    // grab edge" rather than a chunky grip.
+    private let handleVisibleWidth: CGFloat = 5
+    private let handleHeight: CGFloat = 18
+    private let handleOutsidePadding: CGFloat = 10
+    private let handleInsidePadding: CGFloat = 4
+    private let minWidthForHandles: CGFloat = 40
 
     var body: some View {
         let startX = timeline.xPosition(for: range.startSeconds)
@@ -388,7 +444,7 @@ struct RangeInteractionView: View {
                 )
             }
         }
-        .frame(width: width, height: size.height, alignment: .topLeading)
+        .frame(width: timeline.width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(width >= 8) // skip hit testing for sub-pixel slivers
     }
 
@@ -557,10 +613,12 @@ struct EditableClipRangeBar: View {
     let range: ClipRange
     let duration: Double
     let frameDuration: Double
+    let thumbnails: [MediaThumbnail]
     let onChange: (ClipRange) -> Void
 
     @State private var startDragBase: ClipRange?
     @State private var endDragBase: ClipRange?
+    @State private var draggingEdge: DraggingEdge? = nil
 
     var body: some View {
         GeometryReader { proxy in
@@ -571,39 +629,67 @@ struct EditableClipRangeBar: View {
             let startX = width * startRatio
             let endX = width * endRatio
             let selectedWidth = max(endX - startX, 10)
-            let handleSize: CGFloat = 24
+            let handleWidth: CGFloat = 28
+            let handleHeight: CGFloat = 30
 
             ZStack(alignment: .leading) {
-                Capsule().fill(AppPalette.timelineBlock)
+                Capsule()
+                    .fill(AppPalette.timelineBlock)
 
                 Capsule()
-                    .fill(AppPalette.accent)
+                    .fill(AppPalette.accent.opacity(0.78))
                     .frame(width: selectedWidth)
                     .offset(x: startX)
 
-                handle
-                    .offset(x: min(max(startX - handleSize / 2, 0), width - handleSize))
+                rowTrimHandle(isStart: true)
+                    .frame(width: handleWidth, height: handleHeight)
+                    .offset(x: min(max(startX - handleWidth / 2, 0), width - handleWidth))
+                    .contentShape(Rectangle())
+                    .zIndex(2)
                     .gesture(startHandleDrag(totalDuration: totalDuration, width: width))
 
-                handle
-                    .offset(x: min(max(endX - handleSize / 2, 0), width - handleSize))
+                rowTrimHandle(isStart: false)
+                    .frame(width: handleWidth, height: handleHeight)
+                    .offset(x: min(max(endX - handleWidth / 2, 0), width - handleWidth))
+                    .contentShape(Rectangle())
+                    .zIndex(2)
                     .gesture(endHandleDrag(totalDuration: totalDuration, width: width))
+
+                if let draggingEdge {
+                    let seconds = draggingEdge == .start ? range.startSeconds : range.endSeconds
+                    let xPosition = draggingEdge == .start ? startX : endX
+                    HandleFrameTooltip(
+                        seconds: seconds,
+                        xPosition: min(max(xPosition, 24), max(24, width - 24)),
+                        thumbnails: thumbnails
+                    )
+                    .zIndex(3)
+                }
             }
         }
-        .frame(height: 26)
+        .frame(height: 34)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Trim range \(ClipRangeFormatter.title(for: range))")
     }
 
-    private var handle: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
+    private func rowTrimHandle(isStart: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(AppPalette.primaryText)
-            .frame(width: 24, height: 24)
             .overlay {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(AppPalette.background.opacity(0.45), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(AppPalette.accent, lineWidth: 1.5)
             }
-            .shadow(color: Color.black.opacity(0.24), radius: 6, y: 3)
+            .overlay {
+                HStack(spacing: 2) {
+                    ForEach(0..<2, id: \.self) { _ in
+                        Capsule()
+                            .fill(AppPalette.accent)
+                            .frame(width: 2, height: 14)
+                    }
+                }
+                .environment(\.layoutDirection, isStart ? .rightToLeft : .leftToRight)
+            }
+            .shadow(color: Color.black.opacity(0.28), radius: 6, y: 3)
     }
 
     private func startHandleDrag(totalDuration: Double, width: CGFloat) -> some Gesture {
@@ -612,6 +698,7 @@ struct EditableClipRangeBar: View {
                 guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
                 let base = startDragBase ?? range
                 startDragBase = base
+                draggingEdge = .start
                 let delta = Double(value.translation.width / width) * totalDuration
                 let edited = ClipRangeEditor.updatedRange(
                     base,
@@ -623,6 +710,7 @@ struct EditableClipRangeBar: View {
             }
             .onEnded { _ in
                 startDragBase = nil
+                draggingEdge = nil
             }
     }
 
@@ -632,6 +720,7 @@ struct EditableClipRangeBar: View {
                 guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
                 let base = endDragBase ?? range
                 endDragBase = base
+                draggingEdge = .end
                 let delta = Double(value.translation.width / width) * totalDuration
                 let edited = ClipRangeEditor.updatedRange(
                     base,
@@ -643,6 +732,7 @@ struct EditableClipRangeBar: View {
             }
             .onEnded { _ in
                 endDragBase = nil
+                draggingEdge = nil
             }
     }
 }
@@ -672,11 +762,14 @@ struct DraftHighlightView: View {
 
     // Handle geometry — matches `RangeInteractionView` so dragging the
     // draft's edges feels identical to dragging a committed clip's edges.
-    private let handleVisibleWidth: CGFloat = 8
-    private let handleHeight: CGFloat = 24
-    private let handleOutsidePadding: CGFloat = 12
-    private let handleInsidePadding: CGFloat = 6
-    private let minWidthForHandles: CGFloat = 50
+    // Slimmer than the previous 8×24: 5pt visible width × 18pt tall
+    // feels closer to a native iOS scrubber handle and reads as "thin
+    // grab edge" rather than a chunky grip.
+    private let handleVisibleWidth: CGFloat = 5
+    private let handleHeight: CGFloat = 18
+    private let handleOutsidePadding: CGFloat = 10
+    private let handleInsidePadding: CGFloat = 4
+    private let minWidthForHandles: CGFloat = 40
 
     var body: some View {
         let startX = timeline.xPosition(for: range.startSeconds)
@@ -740,7 +833,7 @@ struct DraftHighlightView: View {
                 )
             }
         }
-        .frame(width: width, height: size.height, alignment: .topLeading)
+        .frame(width: timeline.width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(width >= 8)
     }
 

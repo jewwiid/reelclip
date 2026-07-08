@@ -24,6 +24,9 @@ struct ClipView: View {
     @State private var pendingAction: (() -> Void)?
     @State private var userSelectedRangeIndex: Int? = nil
     @State private var isProjectTitleComposing: Bool = false
+    @State private var loopPlayer = AVPlayer()
+    @State private var loopingClipIndex: Int? = nil
+    @State private var loopObserver: NSObjectProtocol? = nil
     @FocusState private var isSegmentFieldFocused: Bool
     @FocusState private var isProjectTitleFocused: Bool
 
@@ -345,12 +348,19 @@ struct ClipView: View {
 
             if let _ = viewModel.sourceURL {
                 videoPreview
+                    // No transition — the default SwiftUI `.scale`
+                    // transition makes the canvas zoom out + back in
+                    // when the project loads and the source URL is
+                    // first resolved.
+                    .transition(.identity)
             } else {
                 emptyVideoState
+                    .transition(.identity)
             }
 
             if let duration = viewModel.durationSeconds, duration > 0 {
                 sourceTimelineScrubber
+                    .transition(.identity)
             }
         }
         .premiumSurface()
@@ -421,7 +431,7 @@ struct ClipView: View {
     }
 
     private var sourceTimelineScrubber: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Label("Preview timeline", systemImage: "rectangle.stack")
                     .font(.subheadline.weight(.bold))
@@ -429,113 +439,145 @@ struct ClipView: View {
 
                 Spacer()
 
-                Text("\(viewModel.scrubPositionLabel) / \(viewModel.durationLabel)")
-                    .font(.caption.monospacedDigit().weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-            }
-
-            HStack(spacing: 10) {
-                Picker("Zoom", selection: $viewModel.timelineZoom) {
-                    ForEach(TimelineZoom.allCases) { zoom in
-                        Text(zoom.rawValue).tag(zoom)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 142)
-
-                Text(viewModel.frameSnapLabel)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppPalette.mutedText)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
+                zoomSlider
             }
 
             if viewModel.sourceThumbnails.isEmpty {
                 thumbnailSkeleton
             } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(viewModel.sourceThumbnails) { thumbnail in
-                            thumbnailButton(thumbnail)
+                // Single continuous film strip with all the marker
+                // overlays (planned ranges, draft highlight, drag
+                // handles) and gestures (tap to seek, long press to
+                // select) — the waveform is gone from the interactive
+                // surface entirely.
+                VideoTimelineView(
+                    thumbnails: viewModel.sourceThumbnails,
+                    plannedRanges: liveTimelineRanges,
+                    duration: viewModel.durationSeconds ?? 0,
+                    scrubPosition: viewModel.scrubPositionSeconds,
+                    draftHighlight: viewModel.cutMode == .highlight ? viewModel.highlightDraft : nil,
+                    frameDuration: viewModel.frameDurationSeconds,
+                    thumbnailScale: viewModel.timelineZoom.thumbnailScale,
+                    selectedRangeIndex: effectiveSelectedRangeIndex,
+                    onTap: { seconds in
+                        viewModel.updateScrubPosition(seconds)
+                        seekPreview(to: seconds, pause: true)
+                        if let index = liveTimelineRanges.firstIndex(where: {
+                            seconds >= $0.startSeconds && seconds <= $0.endSeconds
+                        }) {
+                            userSelectedRangeIndex = index
+                        } else {
+                            userSelectedRangeIndex = nil
                         }
+                    },
+                    onSelectRange: { index in
+                        userSelectedRangeIndex = index
+                        PolishKit.Haptics.selection.play()
+                    },
+                    onUpdateRange: { index, newRange in
+                        viewModel.updatePlannedRange(at: index, to: newRange)
+                    },
+                    onMoveDraft: { newStart in
+                        viewModel.moveHighlightDraft(toStart: newStart)
+                        viewModel.updateScrubPosition(newStart)
+                        seekPreview(to: newStart, pause: true)
+                    },
+                    onResizeDraftStart: { newStart in
+                        viewModel.setHighlightStart(newStart)
+                        viewModel.updateScrubPosition(newStart)
+                        seekPreview(to: newStart, pause: true)
+                    },
+                    onResizeDraftEnd: { newEnd in
+                        viewModel.setHighlightEnd(newEnd)
+                        viewModel.updateScrubPosition(newEnd)
+                        seekPreview(to: newEnd, pause: true)
                     }
-                    .padding(.vertical, 2)
-                }
+                )
+                .animation(.snappy(duration: 0.22), value: liveTimelineRanges)
+                .animation(.snappy(duration: 0.22), value: effectiveSelectedRangeIndex)
+                .animation(.snappy(duration: 0.22), value: viewModel.highlightDraft)
             }
 
+            // Audio waveform — kept as a visual reference only.
+            // No interaction (scrubbing, marker drag) lives here;
+            // everything is on the film strip above.
             WaveformStrip(
                 samples: viewModel.waveformSamples,
                 plannedRanges: liveTimelineRanges,
                 duration: viewModel.durationSeconds ?? 0,
                 scrubPosition: viewModel.scrubPositionSeconds,
-                onScrub: { seconds in
-                    viewModel.updateScrubPosition(seconds)
-                    // Scrubbing the waveform repositions the playhead AND
-                    // pauses — continuing to play while the user drags
-                    // causes visible "skip ahead" jitter. `pause: true`
-                    // halts playback; the play button is the only way to
-                    // resume. (Previously: scrub called `play: true`,
-                    // which started playback on every drag tick.)
-                    seekPreview(to: seconds, pause: true)
-                    // Scrubbing inside a clip selects it; scrubbing into a gap
-                    // clears the selection so the handles disappear.
-                    if let index = liveTimelineRanges.firstIndex(where: {
-                        seconds >= $0.startSeconds && seconds <= $0.endSeconds
-                    }) {
-                        userSelectedRangeIndex = index
-                    } else {
-                        userSelectedRangeIndex = nil
-                    }
-                },
+                onScrub: { _ in },
                 selectedRangeIndex: effectiveSelectedRangeIndex,
                 frameDuration: viewModel.frameDurationSeconds,
-                onSelectRange: { index in
-                    userSelectedRangeIndex = index
-                    PolishKit.Haptics.selection.play()
-                },
-                onUpdateRange: { index, newRange in
-                    viewModel.updatePlannedRange(at: index, to: newRange)
-                },
+                onSelectRange: { _ in },
+                onUpdateRange: { _, _ in },
                 draftHighlight: viewModel.cutMode == .highlight ? viewModel.highlightDraft : nil,
-                onMoveDraft: { newStart in
-                    viewModel.moveHighlightDraft(toStart: newStart)
-                    // Scrub the preview to the draft's start so the user
-                    // sees what's under the highlight as they drag.
-                    viewModel.updateScrubPosition(newStart)
-                    seekPreview(to: newStart, pause: true)
-                },
-                onResizeDraftStart: { newStart in
-                    viewModel.setHighlightStart(newStart)
-                    viewModel.updateScrubPosition(newStart)
-                    seekPreview(to: newStart, pause: true)
-                },
-                onResizeDraftEnd: { newEnd in
-                    viewModel.setHighlightEnd(newEnd)
-                    // Scrub to the end so the user sees where the right
-                    // edge lands.
-                    viewModel.updateScrubPosition(newEnd)
-                    seekPreview(to: newEnd, pause: true)
-                },
-                thumbnails: viewModel.sourceThumbnails
+                onMoveDraft: { _ in },
+                onResizeDraftStart: { _ in },
+                onResizeDraftEnd: { _ in },
+                thumbnails: viewModel.sourceThumbnails,
+                stripHeight: 48
             )
-            .animation(.snappy(duration: 0.22), value: liveTimelineRanges)
-            .animation(.snappy(duration: 0.22), value: effectiveSelectedRangeIndex)
-            .animation(.snappy(duration: 0.22), value: viewModel.highlightDraft)
+            .allowsHitTesting(false)
 
-            // Previously: a system `Slider` rendered here as a SECOND
-            // scrubber on top of the waveform. Two scrubbers, two
-            // sources of truth for "where is the playhead" — every
-            // scrub tick raced between the two. Now removed; the
-            // waveform is the single canonical scrub surface, and the
-            // thumbnail row + transcript word taps also seek via
-            // `seekPreview(to:)` (no playback change).
+            playbackScrubber
         }
         .padding(12)
         .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+    }
+
+    /// 3-stop zoom slider: Fit, 2x, 4x. Lives in the top-right of the
+    /// "Preview timeline" panel header.
+    private var zoomSlider: some View {
+        let lastIdx = max(0, TimelineZoom.allCases.count - 1)
+        return HStack(spacing: 6) {
+            Image(systemName: "minus.magnifyingglass")
+                .font(.caption2)
+                .foregroundStyle(AppPalette.secondaryText)
+            Slider(
+                value: Binding(
+                    get: { Double(TimelineZoom.allCases.firstIndex(of: viewModel.timelineZoom) ?? 0) },
+                    set: { newValue in
+                        let idx = max(0, min(lastIdx, Int(newValue.rounded())))
+                        viewModel.timelineZoom = TimelineZoom.allCases[idx]
+                    }
+                ),
+                in: 0...Double(lastIdx),
+                step: 1
+            )
+            .frame(width: 92)
+            Text(viewModel.timelineZoom.rawValue)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppPalette.primaryText)
+                .frame(width: 24, alignment: .leading)
+        }
+        .frame(width: 170)
+    }
+
+    /// Single canonical playback scrubber. Replaces the previous second
+    /// scrubber that lived on the waveform (which was removed to avoid
+    /// two surfaces fighting for the same playhead value).
+    private var playbackScrubber: some View {
+        HStack(spacing: 10) {
+            Slider(
+                value: Binding(
+                    get: { viewModel.scrubPositionSeconds },
+                    set: { newValue in
+                        viewModel.updateScrubPosition(newValue)
+                        seekPreview(to: newValue, pause: true)
+                    }
+                ),
+                in: 0...max(1, viewModel.durationSeconds ?? 1)
+            )
+
+            Text("\(viewModel.scrubPositionLabel) / \(viewModel.durationLabel)")
+                .font(.caption.monospacedDigit().weight(.bold))
+                .foregroundStyle(AppPalette.secondaryText)
+                .frame(width: 90, alignment: .trailing)
         }
     }
 
@@ -662,21 +704,21 @@ struct ClipView: View {
                     safetyStrip
                     if viewModel.cutMode == .fixed {
                         fixedModeQueryControl
-                    } else {
-                        // Smart Pause uses the length directly. Highlight
-                        // mode ALSO shows this as the fallback default —
-                        // `highlightDraftDuration` initializes from it and
-                        // any edit here resets the Highlight value back to
-                        // match (one-way sync). The Highlight-only "Clip
-                        // length" control below is the user override that
-                        // DOESN'T write back here.
+                    } else if viewModel.cutMode != .highlight {
+                        // Smart Pause uses the length directly; AI Assist
+                        // uses it as a seed for the prompt planner. Highlight
+                        // mode is visual-only — duration comes from the
+                        // timeline drag, so the editable "Seconds per clip"
+                        // field is hidden in Highlight.
                         secondsControl
                     }
                     if viewModel.cutMode == .highlight {
                         // Highlight mode is fully manual — no prompt, no AI.
-                        // User picks a clip duration, drags the band on the
-                        // timeline, taps "Add to plan".
-                        highlightDurationControl
+                        // User taps the timeline to set start, drags the
+                        // band's edge handles to set end, taps "Add to plan".
+                        // The "Clip length" field below is read-only — it
+                        // shows the LIVE length of the current draft.
+                        highlightDurationDisplay
                         highlightAddToPlanButton
                     } else if viewModel.cutMode == .aiAssist {
                         promptControl
@@ -838,63 +880,211 @@ struct ClipView: View {
     }
 
     private var secondsControl: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(secondsFieldTitle)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(AppPalette.secondaryText)
+        durationSelector(
+            title: secondsFieldTitle,
+            systemImage: "timer",
+            value: Binding(
+                get: { viewModel.parsedSegmentLength ?? Double(viewModel.defaultSegmentLength) },
+                set: { viewModel.setSegmentDuration($0) }
+            ),
+            range: selectableClipDurationRange,
+            detail: segmentDurationDetail
+        )
+    }
 
-            HStack(spacing: 10) {
-                TextField("30", text: $viewModel.segmentLengthText)
-                    .keyboardType(.numberPad)
-                    .font(.subheadline.monospacedDigit().weight(.bold))
+    /// Highlight-mode clip length control. Updates the draft range as the
+    /// user picks presets or moves the slider, so the timeline previews the
+    /// selected duration immediately.
+    private var highlightDurationDisplay: some View {
+        durationSelector(
+            title: "Clip length",
+            systemImage: "ruler",
+            value: Binding(
+                get: { viewModel.highlightDraft?.duration ?? viewModel.highlightDraftDuration },
+                set: { viewModel.setHighlightDuration($0) }
+            ),
+            range: selectableClipDurationRange,
+            detail: highlightDurationDetail
+        )
+    }
+
+    private var selectableClipDurationRange: ClosedRange<Double> {
+        let sourceLimitedMaximum: Double
+        if let duration = viewModel.durationSeconds, duration.isFinite, duration > 0 {
+            sourceLimitedMaximum = min(max(duration, 1), 120)
+        } else {
+            sourceLimitedMaximum = 120
+        }
+        return 1...max(1, sourceLimitedMaximum)
+    }
+
+    private var segmentDurationDetail: String? {
+        guard let duration = viewModel.durationSeconds,
+              duration.isFinite,
+              duration > 0,
+              let clipLength = viewModel.parsedSegmentLength,
+              clipLength.isFinite,
+              clipLength > 0
+        else {
+            return nil
+        }
+
+        let estimatedCount = max(Int(ceil(duration / clipLength)), 1)
+        return "About \(estimatedCount) clip\(estimatedCount == 1 ? "" : "s") across \(viewModel.durationLabel)"
+    }
+
+    private var fixedDurationDetail: String? {
+        guard let query = viewModel.effectiveFixedQuery,
+              query.isValid,
+              let duration = query.durationSeconds,
+              duration.isFinite,
+              duration > 0
+        else {
+            return nil
+        }
+
+        let count = query.count ?? viewModel.fixedModeButtonCount
+        let spacing = query.intervalSeconds ?? Double(viewModel.fixedModeButtonInterval)
+        return "\(count) clip\(count == 1 ? "" : "s") at \(formattedClipDuration(duration)), every \(formattedClipDuration(spacing))"
+    }
+
+    private var highlightDurationDetail: String? {
+        if let draft = viewModel.highlightDraft {
+            return "Live range \(ClipRangeFormatter.formatTime(draft.startSeconds)) - \(ClipRangeFormatter.formatTime(draft.endSeconds))"
+        }
+
+        guard viewModel.durationSeconds != nil else { return nil }
+        return "Starts at \(viewModel.scrubPositionLabel)"
+    }
+
+    private func durationSelector(
+        title: String,
+        systemImage: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        detail: String?
+    ) -> some View {
+        let clampedValue = min(max(value.wrappedValue, range.lowerBound), range.upperBound)
+        let sliderBinding = Binding<Double>(
+            get: { min(max(value.wrappedValue, range.lowerBound), range.upperBound) },
+            set: { newValue in
+                let rounded = newValue.rounded()
+                value.wrappedValue = min(max(rounded, range.lowerBound), range.upperBound)
+            }
+        )
+        let presetValues = durationPresetSeconds.filter { range.contains(Double($0)) }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppPalette.accent)
+                    .frame(width: 30, height: 30)
+                    .background(AppPalette.accent.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppPalette.mutedText)
+                        .textCase(.uppercase)
+                        .tracking(0.6)
+                    if let detail {
+                        Text(detail)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppPalette.secondaryText)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                Text(formattedClipDuration(clampedValue))
+                    .font(.title3.monospacedDigit().weight(.black))
                     .foregroundStyle(AppPalette.primaryText)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 7)
+                    .background(AppPalette.mediaWell, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(AppPalette.hairline, lineWidth: 1)
                     }
-                    .frame(width: 80)
-
-                Text("seconds")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppPalette.secondaryText)
-
-                Spacer()
             }
+
+            if !presetValues.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(presetValues, id: \.self) { preset in
+                            durationPresetButton(
+                                seconds: preset,
+                                isSelected: Int(clampedValue.rounded()) == preset
+                            ) {
+                                value.wrappedValue = Double(preset)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+
+            VStack(spacing: 5) {
+                Slider(value: sliderBinding, in: range, step: 1)
+                    .tint(AppPalette.accent)
+                    .accessibilityLabel(title)
+                    .accessibilityValue(formattedClipDuration(clampedValue))
+
+                HStack {
+                    Text(formattedClipDuration(range.lowerBound))
+                    Spacer()
+                    Text(formattedClipDuration(range.upperBound))
+                }
+                .font(.caption2.monospacedDigit().weight(.semibold))
+                .foregroundStyle(AppPalette.mutedText)
+            }
+        }
+        .padding(12)
+        .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
         }
     }
 
-    /// Highlight-mode-specific duration input. Numeric text field bound
-    /// to `highlightDraftDuration` — no slider.
-    private var highlightDurationControl: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Clip length")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(AppPalette.secondaryText)
+    private var durationPresetSeconds: [Int] {
+        [5, 10, 15, 30, 45, 60]
+    }
 
-            HStack(spacing: 10) {
-                TextField("5", text: highlightDurationTextBinding)
-                    .keyboardType(.numberPad)
-                    .font(.subheadline.monospacedDigit().weight(.bold))
-                    .foregroundStyle(AppPalette.primaryText)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(AppPalette.hairline, lineWidth: 1)
-                    }
-                    .frame(width: 80)
-
-                Text("seconds")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppPalette.secondaryText)
-
-                Spacer()
-            }
+    private func durationPresetButton(
+        seconds: Int,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            action()
+            PolishKit.Haptics.tap(.light).play()
+        } label: {
+            Text("\(seconds)s")
+                .font(.caption.monospacedDigit().weight(.black))
+                .foregroundStyle(isSelected ? AppPalette.background : AppPalette.primaryText)
+                .frame(minWidth: 44)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(
+                    isSelected ? AppPalette.accent : AppPalette.raisedSurface,
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(isSelected ? AppPalette.accent : AppPalette.hairline, lineWidth: 1)
+                }
         }
+        .buttonStyle(.plain)
+    }
+
+    private func formattedClipDuration(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "--" }
+        let rounded = max(seconds, 0).rounded()
+        return "\(Int(rounded))s"
     }
 
     /// The big "Add to plan" button. Committing the current draft appends
@@ -924,26 +1114,6 @@ struct ClipView: View {
         }
         .buttonStyle(.plain)
         .disabled(viewModel.highlightDraft == nil)
-    }
-
-    private var highlightDurationTextBinding: Binding<String> {
-        Binding(
-            get: { String(Int(viewModel.highlightDraftDuration)) },
-            set: { newValue in
-                let cleaned = newValue.filter { $0.isNumber }
-                if let parsed = Int(cleaned), parsed >= 1 {
-                    viewModel.setHighlightDuration(Double(parsed))
-                }
-            }
-        )
-    }
-
-    private var formattedHighlightDuration: String {
-        let v = viewModel.highlightDraftDuration
-        let rounded = (v * 10).rounded() / 10
-        return rounded.truncatingRemainder(dividingBy: 1) == 0
-            ? String(Int(rounded))
-            : String(format: "%.1f", rounded)
     }
 
     private var formattedHighlightStart: String {
@@ -1006,7 +1176,10 @@ struct ClipView: View {
         return VStack(alignment: .leading, spacing: 8) {
             TextField(
                 "e.g. 4 five-second clips cut every 10 seconds",
-                text: $viewModel.fixedModeQueryDraft,
+                text: Binding(
+                    get: { viewModel.fixedModeQueryDraft },
+                    set: { viewModel.updateFixedModeQueryDraft($0) }
+                ),
                 axis: .vertical
             )
             .lineLimit(2...3)
@@ -1193,29 +1366,28 @@ struct ClipView: View {
                 systemImage: "rectangle.stack",
                 value: Binding(
                     get: { viewModel.fixedModeButtonCount },
-                    set: { viewModel.fixedModeButtonCount = max(1, $0) }
+                    set: { viewModel.setFixedModeButtonCount($0) }
                 ),
                 range: 1...50,
                 step: 1,
                 unit: ""
             )
-            fixedModeStepper(
-                title: "Duration of clip",
+            durationSelector(
+                title: "Clip duration",
                 systemImage: "clock",
                 value: Binding(
-                    get: { viewModel.fixedModeButtonDuration },
-                    set: { viewModel.fixedModeButtonDuration = max(1, $0) }
+                    get: { Double(viewModel.fixedModeButtonDuration) },
+                    set: { viewModel.setFixedModeButtonDuration($0) }
                 ),
-                range: 1...120,
-                step: 1,
-                unit: "s"
+                range: selectableClipDurationRange,
+                detail: fixedDurationDetail
             )
             fixedModeStepper(
                 title: "Increment of space",
                 systemImage: "arrow.left.and.right",
                 value: Binding(
                     get: { viewModel.fixedModeButtonInterval },
-                    set: { viewModel.fixedModeButtonInterval = max(1, $0) }
+                    set: { viewModel.setFixedModeButtonInterval($0) }
                 ),
                 range: 1...300,
                 step: 1,
@@ -1499,42 +1671,61 @@ struct ClipView: View {
         .premiumSurface()
     }
 
+    // MARK: - Long-press clip preview (loops the [start, end] range muted)
+
+    private func startPlannedClipLoop(at index: Int) {
+        guard let url = viewModel.sourceURL else { return }
+        guard viewModel.plannedRanges.indices.contains(index) else { return }
+        let range = viewModel.plannedRanges[index]
+        if loopingClipIndex == index { return }
+        // Stop any previous loop first (also removes its observer).
+        stopPlannedClipLoop()
+
+        let timescale: CMTimeScale = 600
+        let start = CMTime(seconds: range.startSeconds, preferredTimescale: timescale)
+        let end = CMTime(seconds: range.endSeconds, preferredTimescale: timescale)
+        let item = AVPlayerItem(url: url)
+        item.forwardPlaybackEndTime = end
+
+        loopPlayer.isMuted = true
+        loopPlayer.replaceCurrentItem(with: item)
+        loopPlayer.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            loopPlayer.play()
+        }
+        loopingClipIndex = index
+
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [start] _ in
+            // Loop: rewind to the clip start and play again.
+            loopPlayer.seek(to: start, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                loopPlayer.play()
+            }
+        }
+    }
+
+    private func stopPlannedClipLoop() {
+        loopPlayer.pause()
+        if let observer = loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        loopObserver = nil
+        loopingClipIndex = nil
+    }
+
     private func clipRangeRow(index: Int, range: ClipRange) -> some View {
         HStack(spacing: 12) {
-            // Thumbnail of the frame closest to the clip's start.
-            // Falls back to the numbered circle when no thumbnails
-            // have been generated yet (e.g. still loading).
-            if let thumb = closestThumbnail(to: range.startSeconds) {
-                Image(uiImage: thumb.image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 56, height: 56)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(AppPalette.hairline, lineWidth: 1)
+            plannedClipFramePair(index: index, range: range)
+                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .onLongPressGesture(minimumDuration: 0.2, maximumDistance: 30) { } onPressingChanged: { isPressing in
+                    if isPressing {
+                        startPlannedClipLoop(at: index)
+                    } else {
+                        stopPlannedClipLoop()
                     }
-                    .overlay(alignment: .bottomLeading) {
-                        Text("#\(index + 1)")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                            .padding(3)
-                    }
-            } else {
-                VStack(spacing: 4) {
-                    Text("#\(index + 1)")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AppPalette.background)
-                        .frame(width: 34, height: 34)
-                        .background(AppPalette.accent, in: Circle())
-                    Text(ClipRangeFormatter.durationLabel(for: range))
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(AppPalette.secondaryText)
                 }
-            }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(ClipRangeFormatter.title(for: range))
@@ -1556,7 +1747,8 @@ struct ClipView: View {
                 EditableClipRangeBar(
                     range: range,
                     duration: viewModel.durationSeconds ?? 0,
-                    frameDuration: 1.0 / 30.0,
+                    frameDuration: viewModel.frameDurationSeconds,
+                    thumbnails: viewModel.sourceThumbnails,
                     onChange: { newRange in
                         viewModel.updatePlannedRange(at: index, to: newRange)
                     }
@@ -1569,6 +1761,90 @@ struct ClipView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(AppPalette.hairline, lineWidth: 1)
         }
+    }
+
+    private func plannedClipFramePair(index: Int, range: ClipRange) -> some View {
+        ZStack {
+            HStack(spacing: 4) {
+                plannedClipFrameBadge(
+                    title: "IN",
+                    seconds: range.startSeconds,
+                    thumbnail: closestThumbnail(to: range.startSeconds)
+                )
+                plannedClipFrameBadge(
+                    title: "OUT",
+                    seconds: outPreviewSeconds(for: range),
+                    thumbnail: closestThumbnail(to: outPreviewSeconds(for: range))
+                )
+            }
+            .opacity(loopingClipIndex == index ? 0 : 1)
+
+            if loopingClipIndex == index {
+                PreviewVideoView(player: loopPlayer)
+                    .frame(width: 92, height: 58)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+        }
+        .frame(width: 92, height: 58)
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+        .overlay(alignment: .topLeading) {
+            Text("#\(index + 1)")
+                .font(.caption2.weight(.black))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .padding(3)
+        }
+    }
+
+    private func plannedClipFrameBadge(
+        title: String,
+        seconds: Double,
+        thumbnail: MediaThumbnail?
+    ) -> some View {
+        ZStack(alignment: .bottomLeading) {
+            if let thumbnail {
+                Image(uiImage: thumbnail.image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 44, height: 58)
+                    .clipShape(Rectangle())
+            } else {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(AppPalette.mediaWell)
+                    .frame(width: 44, height: 58)
+                    .overlay {
+                        Image(systemName: "film")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(AppPalette.secondaryText)
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 8, weight: .black))
+                Text(ClipRangeFormatter.formatTime(seconds))
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.black.opacity(0.58))
+        }
+        .frame(width: 44, height: 58)
+        .clipped()
+    }
+
+    private func outPreviewSeconds(for range: ClipRange) -> Double {
+        let frameDuration = viewModel.frameDurationSeconds.isFinite && viewModel.frameDurationSeconds > 0
+            ? viewModel.frameDurationSeconds
+            : 1.0 / 30.0
+        return max(range.startSeconds, range.endSeconds - frameDuration)
     }
 
     /// Find the source thumbnail closest to a given time. Used to show a
@@ -1642,7 +1918,7 @@ struct ClipView: View {
             }
             .buttonStyle(.plain)
             .disabled(!isShareable)
-            .accessibilityLabel("Open iOS share sheet for \(clip.title)")
+            .accessibilityLabel("Open iOS share sheet for \(clip.displayTitle)")
         }
         .padding(12)
         .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))

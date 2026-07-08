@@ -6,9 +6,9 @@ import SwiftUI
 import UIKit
 
 enum CutMode: String, CaseIterable, Identifiable, Codable {
+    case highlight = "Highlight"
     case fixed = "Fixed"
     case smartPause = "Smart Pause"
-    case highlight = "Highlight"
     case aiAssist = "AI Assist"
 
     var id: String { rawValue }
@@ -213,10 +213,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// values back into the text field so users see a phrase they
     /// can edit. We use a single canonical phrase to avoid drift.
     func syncFixedModeAcrossStyles(to newStyle: FixedModeInputStyle) {
+        let styleWillChange = fixedModeInputStyle != newStyle
         switch (fixedModeInputStyle, newStyle) {
         case (.text, .buttons):
             if let parsed = parsedFixedQuery, parsed.isValid {
-                if let c = parsed.count { fixedModeButtonCount = c }
+                if let c = parsed.count { fixedModeButtonCount = max(1, c) }
                 if let d = parsed.durationSeconds {
                     fixedModeButtonDuration = max(1, Int(d.rounded()))
                 }
@@ -233,6 +234,16 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         case (_, _):
             break
         }
+
+        if styleWillChange {
+            invalidateRecipePreview(status: "Previewing fixed clip recipe.")
+        }
+    }
+
+    func updateFixedModeQueryDraft(_ text: String) {
+        guard fixedModeQueryDraft != text else { return }
+        fixedModeQueryDraft = text
+        invalidateRecipePreview(status: "Previewing fixed clip recipe.")
     }
 
     var effectiveFixedQuery: ClipQuery? {
@@ -369,20 +380,21 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// Default display title for a planned clip at the given index — used as
     /// the seed when rendering clips and when the user clears their custom
     /// name (so the fallback path is consistent everywhere).
-    func clipDefaultTitle(for index: Int) -> String {
+    func clipDefaultTitle(for index: Int, totalCount: Int? = nil) -> String {
         let projectName = currentProjectTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        let suffix = "Clip \(index + 1)"
+        let suffix = SegmentOutput.defaultTitle(for: index, totalCount: totalCount)
         if projectName.isEmpty || projectName == "New project" {
             return suffix
         }
-        return "\(projectName) — \(suffix)"
+        return "\(projectName) - \(suffix)"
     }
 
     /// Titles aligned to the current `plannedRanges`. Used at export time so
     /// the on-disk filenames + Photos asset names carry the user's naming
     /// from the moment the clip is rendered.
     func clipTitlesForCurrentPlan() -> [String] {
-        plannedRanges.indices.map { clipDefaultTitle(for: $0) }
+        let totalCount = plannedRanges.count
+        return plannedRanges.indices.map { clipDefaultTitle(for: $0, totalCount: totalCount) }
     }
 
     /// Update the current project's title. Empty strings are coerced to the
@@ -415,7 +427,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
 
         // Pass the raw trimmed string through — SegmentOutput normalizes again
-        // and `displayTitle` does the "Clip N" fallback at render time.
+        // and `displayTitle` does the generated fallback at render time.
         clips[index] = clips[index].withTitle(trimmed)
         persistCurrentProject()
         PolishKit.Haptics.selection.play()
@@ -425,14 +437,14 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// carries the clip's display title as its filename. If the on-disk file
     /// already has the right name we just hand it back; otherwise we copy to
     /// a staging directory so AirDrop / Files / iMessage show the friendly
-    /// name instead of the temp "clip-1.mov" the segmenter wrote.
+    /// name instead of the generated fallback name the segmenter wrote.
     ///
     /// The staging file lives under the workspace so the standard cleanup
     /// passes (`cleanupExports`) can reap it later.
     func shareableURL(for clip: SegmentOutput) -> URL? {
         let desiredName = FilenameSanitizer.sanitizedFileName(
             from: clip.displayTitle,
-            fallbackBase: "clip-\(clip.index + 1)",
+            fallbackBase: SegmentOutput.defaultFileBase(for: clip.index),
             fileExtension: clip.url.pathExtension.isEmpty ? "mov" : clip.url.pathExtension
         )
 
@@ -598,7 +610,8 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     var mediaLimitLabel: String {
-        "Max \(MediaProcessingLimits.maximumSourceDurationLabel) source, \(MediaProcessingLimits.maximumPlannedClips) clips"
+        let sourceLimit = MediaProcessingLimits.maximumSourceDurationLabel(for: currentTier)
+        return "Max \(sourceLimit) source, \(MediaProcessingLimits.maximumPlannedClips) clips"
     }
 
     func importSelectedVideo() {
@@ -676,6 +689,72 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         scheduleScrubPositionPersistence()
     }
 
+    private func invalidateRecipePreview(status: String? = nil) {
+        if !plannedRanges.isEmpty {
+            plannedRanges = []
+        }
+        if !clips.isEmpty {
+            clips = []
+        }
+        pendingExportClips = nil
+        progress = 0
+        if let status {
+            statusMessage = status
+        }
+    }
+
+    func setSegmentDuration(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        let upperBound: Double
+        if let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 {
+            upperBound = min(max(durationSeconds, 1), 300)
+        } else {
+            upperBound = 300
+        }
+        let cleaned = Int(min(max(seconds.rounded(), 1), upperBound))
+        guard segmentLengthText != "\(cleaned)" else { return }
+
+        segmentLengthText = "\(cleaned)"
+        defaultSegmentLength = cleaned
+        invalidateRecipePreview()
+        statusMessage = "Clip length set to \(cleaned)s."
+        persistCurrentProject()
+    }
+
+    func setFixedModeButtonCount(_ count: Int) {
+        let cleaned = min(max(count, 1), 50)
+        guard fixedModeButtonCount != cleaned else { return }
+
+        fixedModeButtonCount = cleaned
+        invalidateRecipePreview(status: "Previewing fixed clip recipe.")
+        persistCurrentProject()
+    }
+
+    func setFixedModeButtonDuration(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        let upperBound: Double
+        if let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 {
+            upperBound = min(max(durationSeconds, 1), 300)
+        } else {
+            upperBound = 300
+        }
+        let cleaned = Int(min(max(seconds.rounded(), 1), upperBound))
+        guard fixedModeButtonDuration != cleaned else { return }
+
+        fixedModeButtonDuration = cleaned
+        invalidateRecipePreview(status: "Previewing fixed clip recipe.")
+        persistCurrentProject()
+    }
+
+    func setFixedModeButtonInterval(_ seconds: Int) {
+        let cleaned = min(max(seconds, 1), 300)
+        guard fixedModeButtonInterval != cleaned else { return }
+
+        fixedModeButtonInterval = cleaned
+        invalidateRecipePreview(status: "Previewing fixed clip recipe.")
+        persistCurrentProject()
+    }
+
     func updatePlannedRange(at index: Int, to range: ClipRange) {
         guard plannedRanges.indices.contains(index), let durationSeconds else { return }
         var updated = ClipRangeEditor.updatedRange(
@@ -723,14 +802,24 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         return ClipRange(startSeconds: start, endSeconds: start + clampedDuration)
     }
 
-    /// User typed a new clip duration. Mark the duration as manually
+    /// User selected a new clip duration. Mark the duration as manually
     /// overridden so subsequent edits to `defaultSegmentLength` don't
-    /// trample the user's choice. Does NOT seed `highlightDraftStart`
-    /// — that happens when the user actually taps the timeline, so the
-    /// band only appears once they've chosen a position.
+    /// trample the user's choice. If a source is loaded, seed or resize
+    /// the draft immediately so the timeline reflects the selected length.
     func setHighlightDuration(_ seconds: Double) {
-        let cleaned = seconds.isFinite ? max(seconds, 0.5) : 0.5
-        highlightDraftDuration = cleaned
+        guard seconds.isFinite else { return }
+        let requested = max(seconds, 0.5)
+
+        if let total = durationSeconds, total.isFinite, total > 0 {
+            let cleaned = min(requested, total)
+            highlightDraftDuration = cleaned
+
+            let currentStart = highlightDraftStart ?? scrubPositionSeconds
+            highlightDraftStart = min(max(currentStart, 0), max(0, total - cleaned))
+        } else {
+            highlightDraftDuration = requested
+        }
+
         hasManualHighlightDuration = true
     }
 
@@ -1231,10 +1320,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                     sourceURL: sourceURL,
                     ranges: safeRanges,
                     clipTitles: clipTitlesForCurrentPlan(),
+                    progress: { [weak self] value in
+                        self?.progress = value
+                    },
                     tier: currentTier
-                ) { [weak self] value in
-                    self?.progress = value
-                }
+                )
 
                 try Task.checkCancellation()
 
@@ -2101,7 +2191,15 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     private static func defaultProjectTitle(for url: URL) -> String {
-        var title = url.deletingPathExtension().lastPathComponent
+        let fileStem = url.deletingPathExtension().lastPathComponent
+        let sourceTitle = stripImportedSourcePrefix(from: fileStem)
+        let title = normalizedDefaultProjectTitle(from: sourceTitle)
+
+        return title.isEmpty ? "Untitled project" : title
+    }
+
+    private static func stripImportedSourcePrefix(from fileStem: String) -> String {
+        var title = fileStem
         let components = title.components(separatedBy: "-")
 
         if components.count > 7,
@@ -2113,7 +2211,14 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             }
         }
 
-        return title.isEmpty ? "Untitled project" : title
+        return title
+    }
+
+    private static func normalizedDefaultProjectTitle(from rawTitle: String) -> String {
+        FilenameSanitizer.sanitize(rawTitle, fallback: "")
+            .replacingOccurrences(of: "_+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: " ._-"))
     }
 
     private static func fixedRanges(

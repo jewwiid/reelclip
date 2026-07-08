@@ -89,7 +89,7 @@ struct ReelClipStoredClip: Codable {
     var id: UUID
     var index: Int
     var title: String
-    /// Relative filename of the exported clip (e.g. "clip-1.mov"). The
+    /// Relative filename of the exported clip (e.g. "clip-01.mov"). The
     /// recipient rewrites this to their own exports directory on import.
     /// Storing absolute sandbox paths leaked the sender's container UUID
     /// and was always invalid on the recipient.
