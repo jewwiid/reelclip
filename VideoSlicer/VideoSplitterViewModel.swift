@@ -102,14 +102,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         willSet { invalidateShuffle() }
     }
 
-    /// User-controlled permutation of the planned-clips list for the
-    /// CURRENT flat export. Indices map into the canonical flat list
-    /// built by `orderedFlatExportClips`; `nil` means "no shuffle" —
-    /// render in scene order. In-memory only (not persisted to the
-    /// project file): the user's shuffled order is a per-session
-    /// experiment; reopening the project always starts in canonical
-    /// order. Adding / removing a clip, or switching cut mode, clears
-    /// the shuffle because the canonical indices shift.
+    /// User-controlled permutation of the project export list. Valid orders
+    /// persist with the project and `.reelclip` handoff; structural clip
+    /// changes clear the order because canonical indices then shift.
     @Published var shuffledOrder: [Int]? = nil
     @Published var draggingProjectExportIndex: Int? = nil
     @Published var projectExportDragTargetIndex: Int? = nil
@@ -184,7 +179,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
     }
 
-    // MARK: - Shuffle (per-session, in-memory only)
+    // MARK: - Project export ordering
 
     typealias FlatExportClip = (sceneIndex: Int, clipIndex: Int, scene: MediaProjectScene, range: ClipRange, sourceURL: URL?)
 
@@ -217,12 +212,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// renders each clip using its own scene's source URL.
     var orderedFlatExportClips: [FlatExportClip] {
         let flat = flatExportClips
-        guard let order = shuffledOrder, order.count == flat.count else {
+        guard let order = Self.validatedPermutation(shuffledOrder, count: flat.count) else {
             return flat
         }
-        // Validate indices — if any are out of bounds, fall back to canonical
-        let valid = order.allSatisfy { $0 >= 0 && $0 < flat.count }
-        guard valid else { return flat }
         return order.map { flat[$0] }
     }
 
@@ -230,8 +222,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// (separate from `shuffledOrder != nil` so the UI can ignore
     /// an in-flight empty shuffle).
     var isShuffled: Bool {
-        guard let order = shuffledOrder else { return false }
-        return order.count == flatExportClips.count && !order.isEmpty
+        Self.validatedPermutation(shuffledOrder, count: flatExportClips.count) != nil
     }
 
     /// Reshuffle. Each call gives a different order (SystemRandomNumberGenerator
@@ -242,11 +233,13 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         guard flat.count > 1 else { return }
         let indices = Array(0..<flat.count)
         shuffledOrder = indices.shuffled()
+        persistCurrentProject()
     }
 
     /// Reset to canonical scene order.
     func resetShuffle() {
         shuffledOrder = nil
+        persistCurrentProject()
     }
 
     func reorderProjectExportClips(from source: Int, to destination: Int) {
@@ -267,6 +260,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         let moving = order.remove(at: source)
         order.insert(moving, at: min(destination, order.count))
         shuffledOrder = order
+        persistCurrentProject()
     }
 
     func flatExportClips(for target: ExportTarget) -> [FlatExportClip] {
@@ -434,8 +428,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     /// User-controlled permutation of the saved-clips list.
     /// Indices map into `savedClips`; `nil` means "no shuffle" —
-    /// render in commit order. In-memory only (not persisted):
-    /// the user re-saves to reset, or clears saved entirely. Kept
+    /// render in commit order. Valid orders persist with the project. Kept
     /// separate from `shuffledOrder` so the planned-clips shuffle
     /// and the saved-clips shuffle are independent — committing
     /// the planned list to saved doesn't carry the planned-side
@@ -447,8 +440,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// contract so the saved section's shuffle button can render
     /// the same visual state.
     var isSavedClipsShuffled: Bool {
-        guard let order = shuffledSavedClipsOrder else { return false }
-        return order.count == savedClips.count && !order.isEmpty
+        Self.validatedPermutation(shuffledSavedClipsOrder, count: savedClips.count) != nil
     }
 
     /// Reshuffle the saved row. Each call gives a different order
@@ -457,24 +449,25 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     func shuffleSavedClips() {
         guard savedClips.count > 1 else { return }
         shuffledSavedClipsOrder = Array(0..<savedClips.count).shuffled()
+        persistCurrentProject()
     }
 
     /// Reset the saved row to the order it was committed in.
     func resetSavedClipsShuffle() {
         shuffledSavedClipsOrder = nil
+        persistCurrentProject()
     }
 
     /// Display-order for the saved-clips section. When the user
     /// has shuffled, walks the canonical `savedClips` via
     /// `shuffledSavedClipsOrder`; otherwise returns the canonical
-    /// order as-is. The committed list itself is never mutated
-    /// — shuffle is a per-session view transformation only, so
-    /// re-saving always starts from the canonical commit order.
+    /// order as-is. The committed list itself is never mutated; the
+    /// persisted permutation controls review and export ordering.
     var displayedSavedClips: [ClipRange] {
-        guard let order = shuffledSavedClipsOrder, order.count == savedClips.count else {
+        guard let order = Self.validatedPermutation(shuffledSavedClipsOrder, count: savedClips.count) else {
             return savedClips
         }
-        return order.compactMap { savedClips.indices.contains($0) ? savedClips[$0] : nil }
+        return order.map { savedClips[$0] }
     }
 
     /// Called when the saved row is cleared via the trash button
@@ -592,9 +585,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     @Published var isShowingExportPreview: Bool = false
     @Published var projectTitleDraft: String = ""
     /// PHAsset localIdentifier for the currently-loaded source video.
-    /// Captured from `PhotosPickerItem.itemIdentifier` when the user
-    /// picks a video, and written into `.reelclip` export files so
-    /// the recipient can resolve the source video on their device.
+    /// Captured from `PhotosPickerItem.itemIdentifier` when the user picks a
+    /// video. Used for local/legacy recovery; portable v3 exports strip it and
+    /// carry the original media instead.
     @Published var sourcePhotoLibraryIdentifier: String?
 
     // MARK: - Paywall state
@@ -1307,6 +1300,10 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         applyFreshSpliceDefaults(clearPlannedState: true)
         plannedRanges = []
         clips = []
+        transcriptTask?.cancel()
+        transcriptTask = nil
+        transcript = nil
+        transcriptState = .idle
         pendingExportClips = nil
         pendingExportSceneLabels = [:]
         pendingExportMissingScenes = []
@@ -4651,7 +4648,8 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     private func startTranscriptionIfNeeded(for url: URL, persistWhenReady: Bool) {
         transcriptTask?.cancel()
         if let projectID = currentProjectID,
-           let cached = projects.first(where: { $0.id == projectID })?.transcript,
+           let cachedProject = projects.first(where: { $0.id == projectID }),
+           let cached = cachedProject.activeScene?.transcript ?? cachedProject.transcript,
            !cached.isEmpty {
             transcript = cached
             transcriptState = .ready
@@ -4745,10 +4743,22 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // the "Save" button existed (no `savedClips` field) decode
         // with `[]` and the user starts with an empty saved row.
         savedClips = project.savedClips
+        let flatProjectClipCount = project.scenes.reduce(0) { $0 + $1.plannedRanges.count }
+        shuffledOrder = Self.validatedPermutation(
+            project.projectExportOrder,
+            count: flatProjectClipCount
+        )
+        shuffledSavedClipsOrder = Self.validatedPermutation(
+            project.savedClipsOrder,
+            count: project.savedClips.count
+        )
         isProjectBrowserVisible = false
 
-        // Surface any persisted transcript for the project.
-        if let saved = project.transcript, !saved.isEmpty {
+        // Prefer the active scene's transcript. Project-level transcript is a
+        // legacy fallback for files written before transcripts became
+        // source-scoped.
+        if let saved = project.activeScene?.transcript ?? project.transcript,
+           !saved.isEmpty {
             transcript = saved
             transcriptState = .ready
         } else {
@@ -4777,8 +4787,22 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         let projectSourceURL = sourceURL ?? existingProject?.sourceURL
         let projectDuration = durationSeconds ?? existingProject?.durationSeconds
         guard let projectSourceURL, let projectDuration else { return }
+        // Scene snapshotting publishes `scenes` and therefore invalidates an
+        // index-based order. Capture the valid permutations first, then restore
+        // them after the persisted scene list is assigned below.
+        let pendingProjectExportOrder = shuffledOrder
+        let pendingSavedClipsOrder = shuffledSavedClipsOrder
         let activeSceneIsBlank = activeScene?.hasSource == false
         let sceneState = sceneStateForPersistence(existingProject: existingProject, now: now)
+        let flatProjectClipCount = sceneState.scenes.reduce(0) { $0 + $1.plannedRanges.count }
+        let persistedProjectExportOrder = Self.validatedPermutation(
+            pendingProjectExportOrder,
+            count: flatProjectClipCount
+        )
+        let persistedSavedClipsOrder = Self.validatedPermutation(
+            pendingSavedClipsOrder,
+            count: savedClips.count
+        )
         let project = MediaProject(
             id: projectID,
             title: resolveProjectTitleForPersistence(existingTitle: existingProject?.title, sourceURL: projectSourceURL),
@@ -4796,6 +4820,8 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             exportedClips: clips
                 .filter { isClipShareable($0) }
                 .map(StoredClipOutput.init(clip:)),
+            projectExportOrder: persistedProjectExportOrder,
+            savedClipsOrder: persistedSavedClipsOrder,
             savedClips: savedClips,
             scrubPositionSeconds: Self.clampedSeconds(scrubPositionSeconds, duration: projectDuration),
             transcript: transcript,
@@ -4812,10 +4838,22 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             currentProjectID = projectID
             scenes = project.scenes
             activeSceneId = project.activeSceneId
+            shuffledOrder = project.projectExportOrder
+            shuffledSavedClipsOrder = project.savedClipsOrder
         } catch {
             errorMessage = error.localizedDescription
             statusMessage = "Could not save project state."
         }
+    }
+
+    private static func validatedPermutation(_ order: [Int]?, count: Int) -> [Int]? {
+        guard count > 1,
+              let order,
+              order.count == count,
+              Set(order) == Set(0..<count) else {
+            return nil
+        }
+        return order
     }
 
     private func sceneStateForPersistence(
@@ -4883,13 +4921,14 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // (e.g. a snapshot of a freshly-deleted source).
         let snapshotSourcePath: String? = sourceURL?.standardizedFileURL.path
         let snapshotSourceFileName: String? = sourceURL?.lastPathComponent
+        let previousScene = scenes.first(where: { $0.id == id })
         return MediaProjectScene(
             id: id,
             name: name,
             sourcePath: snapshotSourcePath,
             sourceFileName: snapshotSourceFileName,
             sourcePhotoLibraryIdentifier: sourcePhotoLibraryIdentifier,
-            sourceOriginalFilename: sourceURL?.lastPathComponent,
+            sourceOriginalFilename: previousScene?.sourceOriginalFilename ?? sourceURL?.lastPathComponent,
             durationSeconds: durationSeconds,
             sourceAspectRatio: sourceAspectRatio,
             frameDurationSeconds: frameDurationSeconds,
@@ -4899,6 +4938,24 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             plannedRanges: plannedRanges,
             highlightDraftStart: highlightDraftStart,
             highlightDraftDuration: highlightDraftDuration,
+            transcript: transcript,
+            editorState: MediaProjectSceneEditorState(
+                timelineZoom: timelineZoom,
+                selectedAIProvider: selectedAIProvider,
+                hasManualHighlightDuration: hasManualHighlightDuration,
+                fixedModeInputStyle: fixedModeInputStyle,
+                fixedModeQueryDraft: fixedModeQueryDraft,
+                fixedModeButtonCount: fixedModeButtonCount,
+                fixedModeButtonDuration: fixedModeButtonDuration,
+                fixedModeButtonInterval: fixedModeButtonInterval,
+                fixedModeRandomDuration: fixedModeRandomDuration,
+                fixedModeRandomInterval: fixedModeRandomInterval,
+                fixedModeRandomDurationMinimum: fixedModeRandomDurationMinimum,
+                fixedModeRandomDurationMaximum: fixedModeRandomDurationMaximum,
+                fixedModeRandomIntervalMinimum: fixedModeRandomIntervalMinimum,
+                fixedModeRandomIntervalMaximum: fixedModeRandomIntervalMaximum,
+                fixedModeRandomSeed: fixedModeRandomSeed
+            ),
             scrubPositionSeconds: scrubPositionSeconds,
             createdAt: createdAt,
             updatedAt: updatedAt
@@ -4912,6 +4969,27 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         plannedRanges = scene.plannedRanges
         highlightDraftStart = scene.highlightDraftStart
         highlightDraftDuration = scene.highlightDraftDuration ?? highlightDraftDuration
+        if let editorState = scene.editorState {
+            timelineZoom = editorState.timelineZoom
+            selectedAIProvider = editorState.selectedAIProvider
+            hasManualHighlightDuration = editorState.hasManualHighlightDuration
+            fixedModeInputStyle = editorState.fixedModeInputStyle
+            fixedModeQueryDraft = editorState.fixedModeQueryDraft
+            fixedModeButtonCount = min(max(editorState.fixedModeButtonCount, 1), MediaProcessingLimits.maximumPlannedClips)
+            fixedModeButtonDuration = min(max(editorState.fixedModeButtonDuration, 1), 300)
+            fixedModeButtonInterval = min(max(editorState.fixedModeButtonInterval, 1), 300)
+            fixedModeRandomDuration = editorState.fixedModeRandomDuration
+            fixedModeRandomInterval = editorState.fixedModeRandomInterval
+            fixedModeRandomDurationMinimum = min(max(editorState.fixedModeRandomDurationMinimum, 1), 300)
+            fixedModeRandomDurationMaximum = min(max(editorState.fixedModeRandomDurationMaximum, 1), 300)
+            fixedModeRandomIntervalMinimum = min(max(editorState.fixedModeRandomIntervalMinimum, 1), 300)
+            fixedModeRandomIntervalMaximum = min(max(editorState.fixedModeRandomIntervalMaximum, 1), 300)
+            fixedModeRandomSeed = editorState.fixedModeRandomSeed
+            normalizeFixedModeRandomDurationBounds(anchor: fixedModeRandomDurationMaximum)
+            normalizeFixedModeRandomIntervalBounds(anchor: fixedModeRandomIntervalMaximum)
+        }
+        transcript = scene.transcript
+        transcriptState = scene.transcript?.isEmpty == false ? .ready : .idle
         scrubPositionSeconds = scene.scrubPositionSeconds
         clips = []
         pendingExportClips = nil
@@ -5099,19 +5177,17 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     // MARK: - .reelclip project export / import
     //
     // Projects are persisted internally in `~/Library/Application Support/`
-    // which iOS wipes on app uninstall. To make projects portable — across
-    // reinstalls, devices, and other users — we expose Export/Import via
-    // the `.reelclip` file type. The file is a small JSON snapshot; the
-    // source video stays in Photos (referenced by PHAsset localIdentifier).
+    // which iOS wipes on app uninstall. V3 `.reelclip` exports are document
+    // packages containing the manifest, original scene sources, and rendered
+    // clips. Proxies and preview caches are intentionally regenerated.
     //
     // Export writes to a temp URL the caller hands to UIDocumentPicker in
     // `.forExporting` mode. Import reads a URL the caller got from the
     // picker in `.forOpeningContentTypes: [.reelclip]` mode (or from the
     // Files app via ReelClipProjectURLRouter).
 
-    /// Build a temp file URL containing the current project's `.reelclip`
-    /// snapshot. Caller is expected to hand this URL to a document
-    /// picker for export, then delete the temp file when done.
+    /// Build a temporary portable `.reelclip` package. The caller hands this
+    /// URL to the document picker and removes it when export completes.
     /// Returns nil if there is no active project to export.
     func exportCurrentProjectToTemporaryFile() throws -> (url: URL, suggestedName: String) {
         persistCurrentProject()
@@ -5123,37 +5199,17 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
         let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
 
-        // Look up the PHAsset to populate sourceOriginalFilename +
-        // sourceFileSize in the export file. The localIdentifier
-        // is cached on the viewmodel when the user picks a video.
-        var sourceAsset: PHAsset?
-        var sourceFileSize: Int64?
-        if let photoId = project.sourcePhotoLibraryIdentifier ?? sourcePhotoLibraryIdentifier {
-            let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [photoId], options: nil)
-            if let asset = fetchResult.firstObject {
-                sourceAsset = asset
-                let pw = asset.pixelWidth
-                let ph = asset.pixelHeight
-                let dur = asset.duration.rounded(.up)
-                if pw > 0 && ph > 0 && dur > 0 {
-                    sourceFileSize = Int64(pw) * Int64(ph) * Int64(dur) * 15
-                }
-            }
-        }
-
-        let data = try ReelClipProjectCodec.encode(
-            project,
-            sourceAsset: sourceAsset,
-            sourceFileSize: sourceFileSize,
-            appVersion: appVersion
-        )
         let safeName = FilenameSanitizer.sanitize(
             project.title.trimmingCharacters(in: .whitespacesAndNewlines),
             fallback: "Untitled"
         )
         let filename = "\(safeName).reelclip"
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-        try data.write(to: tempURL, options: [.atomic])
+        try ReelClipProjectCodec.writePortablePackage(
+            project,
+            to: tempURL,
+            appVersion: appVersion
+        )
         return (tempURL, filename)
     }
 
@@ -5175,6 +5231,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             return
         }
         switch result.sourceResolution {
+        case .resolvedViaPackage:
+            currentProjectID = result.project.id
+            openProject(result.project)
         case .resolvedViaPhotos(let url, _),
              .resolvedViaFilename(let url, _):
             // Source is ready — open it for editing.

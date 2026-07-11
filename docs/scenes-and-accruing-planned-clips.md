@@ -1,5 +1,10 @@
 # Scenes + Accruing Planned Clips — Design Doc
 
+> Format update: this design document describes the original v1/v2 JSON
+> approach. Schema v3 now uses a portable document package with embedded source
+> media. See [reelclip-project-format.md](reelclip-project-format.md) for the
+> production handoff contract.
+
 **Status:** draft
 **Author:** Mavis
 **Target release:** post-build 54, 2–3 phases

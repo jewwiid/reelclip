@@ -28,15 +28,17 @@ enum MediaImportError: LocalizedError {
 /// "file doesn't exist" error even though the file is reachable.
 ///
 /// Throws `MediaImportError.iCloudDownloadFailed` if the URL doesn't
-/// materialise within 60 seconds, if iOS refuses to start the download
+/// materialise within the timeout, if iOS refuses to start the download
 /// (file removed from cloud, user signed out, etc.), or if the download
 /// status flips back to `.notDownloaded` mid-flight.
 enum MediaImportPreparation {
-    /// Returns once the URL points at locally-available bytes, or
-    /// throws if the file can't be materialised in 60 seconds. Non-iCloud
-    /// URLs are returned immediately with `progress(1)` reported.
+    /// Returns once the URL points at locally-available bytes, or throws if
+    /// the file can't be materialised before `timeout`. Ten minutes allows a
+    /// multi-GB portable project to download without treating a slow but
+    /// healthy iCloud transfer as a missing file.
     static func ensureFileIsLocal(
         _ url: URL,
+        timeout: TimeInterval = 600,
         progress: @escaping MediaImportProgressHandler
     ) async throws {
         let values = try url.resourceValues(forKeys: [
@@ -66,7 +68,8 @@ enum MediaImportPreparation {
             )
         }
 
-        let deadline = Date().addingTimeInterval(60)
+        let safeTimeout = min(max(timeout, 1), 3_600)
+        let deadline = Date().addingTimeInterval(safeTimeout)
         var lastFraction: Double = 0
         while Date() < deadline {
             let v = try? url.resourceValues(forKeys: [
@@ -100,7 +103,7 @@ enum MediaImportPreparation {
         }
 
         throw MediaImportError.iCloudDownloadFailed(
-            reason: "iCloud download timed out after 60 seconds. Try again with a stronger connection."
+            reason: "iCloud download timed out. Keep ReelClips open and try again with a stronger connection."
         )
     }
 }
@@ -352,6 +355,37 @@ struct MediaWorkspace {
         try importSourceCopyResult(from: sourceURL).url
     }
 
+    /// Calculates how many new bytes a batch of source attachments will add
+    /// after import deduplication. Portable project import uses this for one
+    /// up-front capacity check, avoiding both partial multi-scene imports and
+    /// false "not enough space" errors when the same originals already exist.
+    func additionalBytesRequiredForSourceImports(_ sourceURLs: [URL]) throws -> Int64 {
+        try prepareBaseDirectories()
+        let existingImports = try fileManager.contentsOfDirectory(
+            at: importsDirectory,
+            includingPropertiesForKeys: [.isRegularFileKey]
+        )
+        var knownFingerprints = Set<String>()
+        for existingURL in existingImports {
+            guard existingURL.pathExtension != "json",
+                  existingURL.pathExtension != "partial",
+                  (try? existingURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+                  let fingerprint = try? quickFileFingerprint(existingURL) else {
+                continue
+            }
+            knownFingerprints.insert(fingerprint)
+        }
+
+        var requiredBytes: Int64 = 0
+        for sourceURL in sourceURLs {
+            let fingerprint = try quickFileFingerprint(sourceURL)
+            guard knownFingerprints.insert(fingerprint).inserted else { continue }
+            let (sum, overflow) = requiredBytes.addingReportingOverflow(fileSize(at: sourceURL))
+            requiredBytes = overflow ? Int64.max : sum
+        }
+        return requiredBytes
+    }
+
     /// Copies a source into the private Imports directory and records whether
     /// this call created the file. The ownership bit lets the optional
     /// pre-import trim flow remove a cancelled candidate without touching a
@@ -420,6 +454,26 @@ struct MediaWorkspace {
         try createDirectoryIfNeeded(directory)
         try? excludeFromBackup(directory)
         return directory
+    }
+
+    /// Imports a rendered clip carried inside a portable `.reelclip` package.
+    /// Source footage belongs in `Imports`; already-rendered outputs belong in
+    /// `Exports` so cleanup and sharing continue to use the normal ownership
+    /// rules after a handoff.
+    func importPortableRenderedClip(from sourceURL: URL, into directory: URL) throws -> URL {
+        try prepareBaseDirectories()
+        let sourceBytes = fileSize(at: sourceURL)
+        try validateAvailableCapacity(additionalBytes: sourceBytes)
+        let destinationURL = FilenameSanitizer.uniqueURL(
+            for: sourceURL.lastPathComponent,
+            in: directory
+        )
+        try copyFileReportingProgress(
+            from: sourceURL,
+            to: destinationURL,
+            progress: nil
+        )
+        return destinationURL
     }
 
     func removeDirectories(for clips: [SegmentOutput]) {

@@ -154,7 +154,7 @@ struct ClipQuery: Equatable {
     }
 }
 
-enum FixedModeInputStyle: String, CaseIterable, Identifiable {
+enum FixedModeInputStyle: String, CaseIterable, Identifiable, Codable {
     case text
     case buttons
 

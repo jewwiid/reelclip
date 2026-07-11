@@ -228,6 +228,327 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: staleClipURL.path))
     }
 
+    func testPortableReelClipPackageRoundTripsCompleteEditableProject() async throws {
+        let senderRoot = makeTemporaryDirectory()
+        let sourceA = senderRoot.appendingPathComponent("camera-a.mov")
+        let sourceB = senderRoot.appendingPathComponent("camera-b.mov")
+        let rendered = senderRoot.appendingPathComponent("rendered-clip.mov")
+        let sourceAData = Data("original-source-a".utf8)
+        let sourceBData = Data("original-source-b".utf8)
+        let renderedData = Data("rendered-output".utf8)
+        try sourceAData.write(to: sourceA)
+        try sourceBData.write(to: sourceB)
+        try renderedData.write(to: rendered)
+
+        let now = Date(timeIntervalSince1970: 1_725_000_000)
+        let transcriptA = Transcript(
+            language: "en",
+            segments: [
+                TranscriptSegment(
+                    startSeconds: 0,
+                    endSeconds: 2,
+                    text: "First scene",
+                    words: [TranscriptWord(text: "First", startSeconds: 0, endSeconds: 1)]
+                )
+            ],
+            generatedAt: now
+        )
+        let transcriptB = Transcript(
+            language: "en",
+            segments: [
+                TranscriptSegment(
+                    startSeconds: 4,
+                    endSeconds: 7,
+                    text: "Second scene",
+                    words: [TranscriptWord(text: "Second", startSeconds: 4, endSeconds: 5)]
+                )
+            ],
+            generatedAt: now
+        )
+        let editorState = MediaProjectSceneEditorState(
+            timelineZoom: .ultra,
+            selectedAIProvider: .appleIntelligence,
+            hasManualHighlightDuration: true,
+            fixedModeInputStyle: .buttons,
+            fixedModeQueryDraft: "12 clips",
+            fixedModeButtonCount: 12,
+            fixedModeButtonDuration: 9,
+            fixedModeButtonInterval: 8,
+            fixedModeRandomDuration: true,
+            fixedModeRandomInterval: true,
+            fixedModeRandomDurationMinimum: 3,
+            fixedModeRandomDurationMaximum: 9,
+            fixedModeRandomIntervalMinimum: 2,
+            fixedModeRandomIntervalMaximum: 8,
+            fixedModeRandomSeed: 42
+        )
+        let sceneA = MediaProjectScene(
+            name: "Interview",
+            sourcePath: sourceA.path,
+            sourceFileName: sourceA.lastPathComponent,
+            sourcePhotoLibraryIdentifier: "sender-photos-a",
+            sourceOriginalFilename: sourceA.lastPathComponent,
+            durationSeconds: 20,
+            sourceAspectRatio: 16.0 / 9.0,
+            frameDurationSeconds: 1.0 / 30.0,
+            cutMode: .highlight,
+            segmentLengthText: "5",
+            editPrompt: "Keep the intro",
+            plannedRanges: [
+                ClipRange(
+                    startSeconds: 1,
+                    endSeconds: 6,
+                    reason: "Opening",
+                    isLocked: true,
+                    cutMode: .highlight
+                )
+            ],
+            highlightDraftStart: 8,
+            highlightDraftDuration: 4,
+            transcript: transcriptA,
+            editorState: editorState,
+            scrubPositionSeconds: 3,
+            createdAt: now,
+            updatedAt: now
+        )
+        let sceneB = MediaProjectScene(
+            name: "B-roll",
+            sourcePath: sourceB.path,
+            sourceFileName: sourceB.lastPathComponent,
+            sourcePhotoLibraryIdentifier: "sender-photos-b",
+            sourceOriginalFilename: sourceB.lastPathComponent,
+            durationSeconds: 30,
+            sourceAspectRatio: 9.0 / 16.0,
+            frameDurationSeconds: 1.0 / 60.0,
+            cutMode: .fixed,
+            segmentLengthText: "9",
+            editPrompt: "Fast inserts",
+            plannedRanges: [
+                ClipRange(startSeconds: 4, endSeconds: 13, reason: "Action", cutMode: .fixed)
+            ],
+            transcript: transcriptB,
+            editorState: editorState,
+            scrubPositionSeconds: 11,
+            createdAt: now,
+            updatedAt: now
+        )
+        let storedClip = StoredClipOutput(
+            index: 1,
+            title: "Approved insert",
+            path: rendered.path,
+            startSeconds: 4,
+            endSeconds: 13,
+            photoLibraryLocalIdentifier: "sender-rendered-asset"
+        )
+        let project = MediaProject(
+            id: UUID(),
+            title: "Portable campaign",
+            sourcePath: sourceB.path,
+            sourceFileName: sourceB.lastPathComponent,
+            durationSeconds: 30,
+            sourceAspectRatio: 9.0 / 16.0,
+            frameDurationSeconds: 1.0 / 60.0,
+            cutMode: .fixed,
+            segmentLengthText: "9",
+            editPrompt: "Fast inserts",
+            plannedRanges: sceneB.plannedRanges,
+            scenes: [sceneA, sceneB],
+            activeSceneId: sceneB.id,
+            exportedClips: [storedClip],
+            projectExportOrder: [1, 0],
+            savedClipsOrder: [1, 0],
+            savedClips: sceneA.plannedRanges + sceneB.plannedRanges,
+            scrubPositionSeconds: 11,
+            transcript: transcriptB,
+            sourcePhotoLibraryIdentifier: "sender-photos-b",
+            exportSettings: ExportSettings(resolution: .source, frameRate: .fps60),
+            createdAt: now,
+            updatedAt: now
+        )
+
+        let packageURL = senderRoot.appendingPathComponent("Campaign.reelclip", isDirectory: true)
+        try ReelClipProjectCodec.writePortablePackage(
+            project,
+            to: packageURL,
+            appVersion: "1.0 (130)"
+        )
+
+        let packageValues = try packageURL.resourceValues(forKeys: [.isDirectoryKey])
+        XCTAssertEqual(packageValues.isDirectory, true)
+        let manifestURL = packageURL.appendingPathComponent(ReelClipProjectCodec.manifestFilename)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manifestURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: packageURL.appendingPathComponent("Derived").path))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let envelope = try decoder.decode(
+            ReelClipProjectEnvelope.self,
+            from: Data(contentsOf: manifestURL)
+        )
+        XCTAssertEqual(envelope.schemaVersion, 3)
+        XCTAssertEqual(envelope.formatIdentifier, ReelClipProjectEnvelope.expectedFormatIdentifier)
+        XCTAssertEqual(envelope.media?.attachments.filter { $0.role == .source }.count, 2)
+        XCTAssertEqual(envelope.media?.attachments.filter { $0.role == .renderedClip }.count, 1)
+        XCTAssertTrue(envelope.payload.scenes?.allSatisfy { $0.sourcePath == nil } ?? false)
+        XCTAssertNil(envelope.payload.sourcePhotoLibraryIdentifier)
+        XCTAssertTrue(
+            envelope.payload.scenes?.allSatisfy { $0.sourcePhotoLibraryIdentifier == nil } ?? false
+        )
+        XCTAssertTrue(envelope.payload.exportedClips.allSatisfy { $0.photoLibraryLocalIdentifier == nil })
+        XCTAssertEqual(envelope.payload.transcript, transcriptB)
+        XCTAssertEqual(
+            envelope.payload.exportSettings,
+            ExportSettings(resolution: .source, frameRate: .fps60)
+        )
+
+        let recipientWorkspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let result = try await ReelClipProjectCodec.decode(
+            contentsOf: packageURL,
+            workspace: recipientWorkspace
+        )
+        XCTAssertEqual(result.sourceResolution, .resolvedViaPackage(importedSourceCount: 2))
+        XCTAssertEqual(result.project.id, project.id)
+        XCTAssertEqual(result.project.title, project.title)
+        XCTAssertEqual(result.project.savedClips, project.savedClips)
+        XCTAssertEqual(result.project.projectExportOrder, [1, 0])
+        XCTAssertEqual(result.project.savedClipsOrder, [1, 0])
+        XCTAssertEqual(result.project.transcript, transcriptB)
+        XCTAssertEqual(result.project.exportSettings, project.exportSettings)
+        XCTAssertEqual(result.project.scenes.count, 2)
+
+        let importedA = try XCTUnwrap(result.project.scenes.first(where: { $0.id == sceneA.id }))
+        let importedB = try XCTUnwrap(result.project.scenes.first(where: { $0.id == sceneB.id }))
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(importedA.sourceURL)), sourceAData)
+        XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(importedB.sourceURL)), sourceBData)
+        XCTAssertEqual(importedA.transcript, transcriptA)
+        XCTAssertEqual(importedB.transcript, transcriptB)
+        XCTAssertEqual(importedA.editorState, editorState)
+        XCTAssertEqual(importedB.editorState, editorState)
+        XCTAssertEqual(importedA.plannedRanges, sceneA.plannedRanges)
+        XCTAssertEqual(importedB.plannedRanges, sceneB.plannedRanges)
+        XCTAssertTrue(try XCTUnwrap(importedA.sourceURL).path.hasPrefix(recipientWorkspace.importsDirectory.path))
+        XCTAssertTrue(try XCTUnwrap(importedB.sourceURL).path.hasPrefix(recipientWorkspace.importsDirectory.path))
+
+        let importedRendered = try XCTUnwrap(result.project.exportedClips.first)
+        XCTAssertEqual(try Data(contentsOf: importedRendered.url), renderedData)
+        XCTAssertTrue(importedRendered.path.hasPrefix(recipientWorkspace.exportsDirectory.path))
+    }
+
+    func testLegacyV2FlatReelClipStillImportsItsEditMetadata() async throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let project = makeProject(
+            title: "Legacy plan",
+            workspace: workspace,
+            plannedRanges: [
+                ClipRange(startSeconds: 2, endSeconds: 5, reason: "Legacy", cutMode: .highlight)
+            ]
+        )
+        let encoded = try ReelClipProjectCodec.encode(project, appVersion: "0.9")
+        var root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        root["schemaVersion"] = 2
+        root.removeValue(forKey: "media")
+        var payload = try XCTUnwrap(root["payload"] as? [String: Any])
+        payload.removeValue(forKey: "sourcePhotoLibraryIdentifier")
+        payload.removeValue(forKey: "sourceOriginalFilename")
+        payload.removeValue(forKey: "sourceFileSize")
+        payload.removeValue(forKey: "transcript")
+        payload.removeValue(forKey: "exportSettings")
+        payload["scenes"] = []
+        root["payload"] = payload
+        let legacyData = try JSONSerialization.data(withJSONObject: root)
+
+        let result = try await ReelClipProjectCodec.decode(
+            legacyData,
+            workspace: MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        )
+
+        XCTAssertEqual(result.sourceResolution, .missing)
+        XCTAssertEqual(result.project.id, project.id)
+        XCTAssertEqual(result.project.title, project.title)
+        XCTAssertEqual(result.project.plannedRanges, project.plannedRanges)
+    }
+
+    func testPortableReelClipRejectsAttachmentPathTraversal() async throws {
+        let root = makeTemporaryDirectory()
+        let sourceURL = root.appendingPathComponent("source.mov")
+        try Data("source".utf8).write(to: sourceURL)
+        let scene = MediaProjectScene(
+            name: "Scene 1",
+            sourcePath: sourceURL.path,
+            sourceFileName: sourceURL.lastPathComponent,
+            sourceOriginalFilename: sourceURL.lastPathComponent,
+            durationSeconds: 5,
+            sourceAspectRatio: 16.0 / 9.0,
+            frameDurationSeconds: 1.0 / 30.0,
+            cutMode: .highlight,
+            segmentLengthText: "5",
+            editPrompt: "",
+            plannedRanges: [],
+            scrubPositionSeconds: 0,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        let project = MediaProject(
+            id: UUID(),
+            title: "Unsafe",
+            sourcePath: sourceURL.path,
+            sourceFileName: sourceURL.lastPathComponent,
+            durationSeconds: 5,
+            sourceAspectRatio: 16.0 / 9.0,
+            frameDurationSeconds: 1.0 / 30.0,
+            cutMode: .highlight,
+            segmentLengthText: "5",
+            editPrompt: "",
+            plannedRanges: [],
+            scenes: [scene],
+            activeSceneId: scene.id,
+            scrubPositionSeconds: 0,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        let packageURL = root.appendingPathComponent("Unsafe.reelclip", isDirectory: true)
+        try ReelClipProjectCodec.writePortablePackage(project, to: packageURL, appVersion: "1.0")
+
+        let manifestURL = packageURL.appendingPathComponent(ReelClipProjectCodec.manifestFilename)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let originalEnvelope = try decoder.decode(
+            ReelClipProjectEnvelope.self,
+            from: Data(contentsOf: manifestURL)
+        )
+        var media = try XCTUnwrap(originalEnvelope.media)
+        let attachment = try XCTUnwrap(media.attachments.first)
+        media.attachments[0] = ReelClipMediaAttachment(
+            id: attachment.id,
+            role: attachment.role,
+            relativePath: "../outside.mov",
+            originalFilename: attachment.originalFilename,
+            byteCount: attachment.byteCount
+        )
+        let tampered = ReelClipProjectEnvelope(
+            payload: originalEnvelope.payload,
+            appVersion: originalEnvelope.appVersion,
+            media: media
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(tampered).write(to: manifestURL, options: [.atomic])
+
+        do {
+            _ = try await ReelClipProjectCodec.decode(
+                contentsOf: packageURL,
+                workspace: MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+            )
+            XCTFail("Expected path traversal validation to reject the package")
+        } catch let error as ReelClipProjectCodecError {
+            guard case .invalidPackage = error else {
+                return XCTFail("Unexpected codec error: \(error)")
+            }
+        }
+    }
+
     func testProjectStorePersistsAndSortsProjects() throws {
         let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
         let store = MediaProjectStore(workspace: workspace)

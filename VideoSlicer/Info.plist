@@ -25,6 +25,12 @@
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleTypeIconFiles</key>
+			<array>
+				<string>ReelClipProjectIcon-64.png</string>
+				<string>ReelClipProjectIcon-128.png</string>
+				<string>ReelClipProjectIcon-320.png</string>
+			</array>
 			<key>CFBundleTypeName</key>
 			<string>ReelClips Project</string>
 			<key>CFBundleTypeRole</key>
@@ -35,6 +41,8 @@
 			<array>
 				<string>com.reelclip.project</string>
 			</array>
+			<key>LSTypeIsPackage</key>
+			<true/>
 		</dict>
 	</array>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
@@ -48,24 +56,16 @@
 			<string>ReelClips Project</string>
 			<key>UTTypeConformsTo</key>
 			<array>
-				<string>public.data</string>
+				<string>com.apple.package</string>
 				<string>public.content</string>
-				<string>public.json</string>
 			</array>
-			<key>UTTypeIconFiles</key>
-			<array>
-				<string>ReelClipProjectIcon-64.png</string>
-				<string>ReelClipProjectIcon-320.png</string>
-			</array>
+			<key>UTTypeIconFile</key>
+			<string>ReelClipProjectIcon-320.png</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
 				<array>
 					<string>reelclip</string>
-				</array>
-				<key>public.mime-type</key>
-				<array>
-					<string>application/x-reelclip-project</string>
 				</array>
 			</dict>
 		</dict>

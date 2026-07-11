@@ -1,14 +1,11 @@
-// `.reelclip` file format — JSON envelope describing a saved ReelClip project.
+// `.reelclip` project format.
 //
-// Designed to be portable across installs and machines: a `.reelclip` file is
-// a small JSON snapshot (KB scale) that REFERENCES the source video via its
-// Photos library localIdentifier. The actual video bytes stay in Photos. If
-// the recipient doesn't have the source video, the project still loads —
-// the planned ranges are visible, just in a "source missing" state that
-// prompts the user to re-pick a matching video.
-//
-// Schema versioning lives at the envelope level so we can ship breaking
-// changes without bricking existing user files.
+// Schema v3 is a document package that contains `manifest.json`, original
+// scene source media, and any rendered clips still present in the project.
+// Packages remain editable when handed to another device or editor because
+// import rewrites every media reference into the recipient's private
+// workspace. V1/v2 flat JSON files remain readable and use their Photos
+// identifiers as a best-effort legacy fallback.
 
 import Foundation
 import CoreTransferable
@@ -18,17 +15,24 @@ import UniformTypeIdentifiers
 /// `UTExportedTypeDeclarations` so iOS knows the `.reelclip` extension and
 /// routes taps in Files / share sheets back to us.
 extension UTType {
-    static let reelClipProject = UTType(exportedAs: "com.reelclip.project")
+    static let reelClipProject = UTType(
+        exportedAs: "com.reelclip.project",
+        conformingTo: .package
+    )
 }
 
 /// Top-level JSON envelope. Versioned so we can evolve the schema safely.
 struct ReelClipProjectEnvelope: Codable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
+    static let expectedFormatIdentifier = "app.reelclip.project"
 
     /// Schema version of `payload`. Bump when changing `ReelClipProjectFile`
     /// in a non-backward-compatible way; readers can refuse unknown versions
     /// rather than silently mis-parse.
     let schemaVersion: Int
+    /// Stable magic value that prevents unrelated JSON packages from being
+    /// mistaken for ReelClips projects. Nil only on legacy v1/v2 files.
+    let formatIdentifier: String?
     /// ReelClip app version that wrote this file (informational, used in
     /// "imported from older version" warnings if shape drifts).
     let appVersion: String
@@ -36,13 +40,56 @@ struct ReelClipProjectEnvelope: Codable {
     /// Files even if the project payload lacks a createdAt.
     let exportedAt: Date
     let payload: ReelClipProjectFile
+    /// Present for portable v3 packages. Nil for legacy flat JSON files.
+    let media: ReelClipProjectMediaManifest?
 
-    init(payload: ReelClipProjectFile, appVersion: String) {
+    init(
+        payload: ReelClipProjectFile,
+        appVersion: String,
+        media: ReelClipProjectMediaManifest? = nil
+    ) {
         self.schemaVersion = ReelClipProjectEnvelope.currentSchemaVersion
+        self.formatIdentifier = ReelClipProjectEnvelope.expectedFormatIdentifier
         self.appVersion = appVersion
         self.exportedAt = Date()
         self.payload = payload
+        self.media = media
     }
+}
+
+/// Attachment table for a portable `.reelclip` package. Relationships live in
+/// explicit arrays rather than absolute paths so the manifest never leaks a
+/// sender's sandbox UUID and can be remapped safely on import.
+struct ReelClipProjectMediaManifest: Codable, Equatable {
+    var attachments: [ReelClipMediaAttachment]
+    var projectSourceAttachmentID: UUID?
+    var sceneSourceLinks: [ReelClipSceneSourceLink]
+    var storedClipLinks: [ReelClipStoredClipLink]
+}
+
+struct ReelClipMediaAttachment: Codable, Equatable, Identifiable {
+    enum Role: String, Codable {
+        case source
+        case renderedClip
+    }
+
+    let id: UUID
+    let role: Role
+    /// POSIX-style path relative to the package root, for example
+    /// `Media/Sources/<uuid>-source.mov`.
+    let relativePath: String
+    let originalFilename: String
+    let byteCount: Int64
+}
+
+struct ReelClipSceneSourceLink: Codable, Equatable {
+    let sceneID: UUID
+    let attachmentID: UUID
+}
+
+struct ReelClipStoredClipLink: Codable, Equatable {
+    let clipID: UUID
+    let attachmentID: UUID
 }
 
 /// The actual project snapshot. Fields are additive — when adding new state
@@ -68,7 +115,11 @@ struct ReelClipProjectFile: Codable {
     var scenes: [MediaProjectScene]?
     var activeSceneId: UUID?
     var exportedClips: [ReelClipStoredClip]
+    var projectExportOrder: [Int]?
+    var savedClipsOrder: [Int]?
     var scrubPositionSeconds: Double
+    var transcript: Transcript?
+    var exportSettings: ExportSettings?
     var createdAt: Date
     var updatedAt: Date
 
@@ -130,17 +181,18 @@ extension ReelClipProjectFile {
         self.scenes = project.scenes
         self.activeSceneId = project.activeSceneId
         self.exportedClips = project.exportedClips.map(ReelClipStoredClip.init)
+        self.projectExportOrder = project.projectExportOrder
+        self.savedClipsOrder = project.savedClipsOrder
         self.scrubPositionSeconds = project.scrubPositionSeconds
+        self.transcript = project.transcript
+        self.exportSettings = project.exportSettings
         self.createdAt = project.createdAt
         self.updatedAt = project.updatedAt
         self.sourcePhotoLibraryIdentifier = sourcePhotoLibraryIdentifier
         self.sourceOriginalFilename = sourceOriginalFilename
         self.sourceFileSize = sourceFileSize
-        // Highlight resume state isn't part of MediaProject today; we
-        // leave the optionals nil. A later migration can populate them
-        // once the viewmodel publishes them.
-        self.highlightDraftStart = nil
-        self.highlightDraftDuration = nil
+        self.highlightDraftStart = project.activeScene?.highlightDraftStart
+        self.highlightDraftDuration = project.activeScene?.highlightDraftDuration
     }
 
     /// Reconstitute an in-app `MediaProject` from a file snapshot.
@@ -167,10 +219,13 @@ extension ReelClipProjectFile {
             scenes: scenes,
             activeSceneId: activeSceneId,
             exportedClips: exportedClips.map { $0.toStoredClip() },
+            projectExportOrder: projectExportOrder,
+            savedClipsOrder: savedClipsOrder,
             savedClips: savedClips ?? [],
             scrubPositionSeconds: scrubPositionSeconds,
-            transcript: nil,
+            transcript: transcript,
             sourcePhotoLibraryIdentifier: sourcePhotoLibraryIdentifier,
+            exportSettings: exportSettings,
             createdAt: createdAt,
             updatedAt: updatedAt
         )

@@ -67,30 +67,24 @@ final class ReelClipProjectURLRouter {
             return
         }
 
-        // Security-scoped access must start on the calling thread. We
-        // read the data here, then hop to a background Task for the
-        // expensive PHAsset resource copy so we don't block the main
-        // actor.
+        // Security-scoped access stays active until the package's embedded
+        // media has been copied into the private workspace. Stopping after
+        // reading only the manifest made package children disappear midway
+        // through imports from Files and iCloud providers.
         let didStart = url.startAccessingSecurityScopedResource()
-        let data: Data
-        do {
-            data = try Data(contentsOf: url)
-        } catch {
-            sink.setStatusMessage("Couldn't import: \(error.localizedDescription)")
-            if didStart { url.stopAccessingSecurityScopedResource() }
-            return
-        }
-        if didStart { url.stopAccessingSecurityScopedResource() }
-
-        // Decode + PHAsset copy runs off the main actor. The PHAsset
-        // resource copy can take seconds (especially for iCloud assets),
-        // so blocking the main thread caused UI freezes and deadlocks.
         Task {
+            defer {
+                if didStart { url.stopAccessingSecurityScopedResource() }
+            }
             do {
-                let result = try await ReelClipProjectCodec.decode(data)
+                let result = try await ReelClipProjectCodec.decode(contentsOf: url)
                 await MainActor.run {
                     sink.ingestImportedProject(result)
                     switch result.sourceResolution {
+                    case .resolvedViaPackage(let sourceCount):
+                        sink.setStatusMessage(
+                            "Imported complete project with \(sourceCount) source\(sourceCount == 1 ? "" : "s")."
+                        )
                     case .resolvedViaPhotos:
                         sink.setStatusMessage("Imported project — source video ready.")
                     case .resolvedViaFilename:

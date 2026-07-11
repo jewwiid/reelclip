@@ -74,14 +74,36 @@ struct StoredClipOutput: Identifiable, Codable, Equatable {
     }
 }
 
+/// Recipe controls that need to follow a scene when a project is reopened or
+/// handed to another editor. Render progress, thumbnail caches, proxy URLs,
+/// and drag gestures are deliberately excluded because they are transient or
+/// reproducible from the original source media.
+struct MediaProjectSceneEditorState: Codable, Equatable {
+    var timelineZoom: TimelineZoom
+    var selectedAIProvider: AIProvider
+    var hasManualHighlightDuration: Bool
+    var fixedModeInputStyle: FixedModeInputStyle
+    var fixedModeQueryDraft: String
+    var fixedModeButtonCount: Int
+    var fixedModeButtonDuration: Int
+    var fixedModeButtonInterval: Int
+    var fixedModeRandomDuration: Bool
+    var fixedModeRandomInterval: Bool
+    var fixedModeRandomDurationMinimum: Int
+    var fixedModeRandomDurationMaximum: Int
+    var fixedModeRandomIntervalMinimum: Int
+    var fixedModeRandomIntervalMaximum: Int
+    var fixedModeRandomSeed: UInt64
+}
+
 struct MediaProjectScene: Identifiable, Codable, Equatable {
     let id: UUID
     var name: String
     /// Per-scene source video. The path is a file URL to a local copy
     /// (from `MediaWorkspace.importSourceCopy`); for Photos imports,
-    /// `sourcePhotoLibraryIdentifier` carries the PHAsset localIdentifier
-    /// so the recipient of a `.reelclip` export can re-resolve the asset
-    /// on their device. Per-scene source means Scene 1 can be a cut of
+    /// `sourcePhotoLibraryIdentifier` carries the PHAsset localIdentifier for
+    /// local and legacy recovery. Portable v3 packages embed the source and
+    /// remove that identifier. Per-scene source means Scene 1 can be a cut of
     /// clip A and Scene 2 of clip B in the same project.
     ///
     /// - `sourcePath` / `sourceFileName` / `durationSeconds` /
@@ -111,6 +133,10 @@ struct MediaProjectScene: Identifiable, Codable, Equatable {
     var plannedRanges: [ClipRange]
     var highlightDraftStart: Double?
     var highlightDraftDuration: Double?
+    /// Transcript belongs to the scene source, not to the project globally.
+    /// Optional keeps projects written before per-scene transcripts loadable.
+    var transcript: Transcript?
+    var editorState: MediaProjectSceneEditorState?
     var scrubPositionSeconds: Double
     var createdAt: Date
     var updatedAt: Date
@@ -131,6 +157,8 @@ struct MediaProjectScene: Identifiable, Codable, Equatable {
         plannedRanges: [ClipRange],
         highlightDraftStart: Double? = nil,
         highlightDraftDuration: Double? = nil,
+        transcript: Transcript? = nil,
+        editorState: MediaProjectSceneEditorState? = nil,
         scrubPositionSeconds: Double,
         createdAt: Date,
         updatedAt: Date
@@ -150,6 +178,8 @@ struct MediaProjectScene: Identifiable, Codable, Equatable {
         self.plannedRanges = plannedRanges
         self.highlightDraftStart = highlightDraftStart
         self.highlightDraftDuration = highlightDraftDuration
+        self.transcript = transcript
+        self.editorState = editorState
         self.scrubPositionSeconds = scrubPositionSeconds
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -159,14 +189,14 @@ struct MediaProjectScene: Identifiable, Codable, Equatable {
     /// identifier the loader knows how to resolve). `false` for fresh
     /// scenes the user created from a snapshot before picking a source.
     var hasSource: Bool {
-        sourcePath != nil || sourcePhotoLibraryIdentifier != nil
+        sourcePath?.isEmpty == false || sourcePhotoLibraryIdentifier?.isEmpty == false
     }
 
     /// File URL for the per-scene source video, when the source lives
     /// as a local file. `nil` for Photos-only scenes (which the loader
     /// resolves via `sourcePhotoLibraryIdentifier`).
     var sourceURL: URL? {
-        guard let sourcePath else { return nil }
+        guard let sourcePath, !sourcePath.isEmpty else { return nil }
         return URL(fileURLWithPath: sourcePath)
     }
 
@@ -175,7 +205,7 @@ struct MediaProjectScene: Identifiable, Codable, Equatable {
         case sourcePath, sourceFileName, sourcePhotoLibraryIdentifier, sourceOriginalFilename
         case durationSeconds, sourceAspectRatio, frameDurationSeconds
         case cutMode, segmentLengthText, editPrompt, plannedRanges
-        case highlightDraftStart, highlightDraftDuration, scrubPositionSeconds
+        case highlightDraftStart, highlightDraftDuration, transcript, editorState, scrubPositionSeconds
         case createdAt, updatedAt
     }
 
@@ -200,6 +230,8 @@ struct MediaProjectScene: Identifiable, Codable, Equatable {
         self.plannedRanges = try c.decode([ClipRange].self, forKey: .plannedRanges)
         self.highlightDraftStart = try c.decodeIfPresent(Double.self, forKey: .highlightDraftStart)
         self.highlightDraftDuration = try c.decodeIfPresent(Double.self, forKey: .highlightDraftDuration)
+        self.transcript = try c.decodeIfPresent(Transcript.self, forKey: .transcript)
+        self.editorState = try c.decodeIfPresent(MediaProjectSceneEditorState.self, forKey: .editorState)
         self.scrubPositionSeconds = try c.decode(Double.self, forKey: .scrubPositionSeconds)
         self.createdAt = try c.decode(Date.self, forKey: .createdAt)
         self.updatedAt = try c.decode(Date.self, forKey: .updatedAt)
@@ -222,6 +254,8 @@ struct MediaProjectScene: Identifiable, Codable, Equatable {
         try c.encode(plannedRanges, forKey: .plannedRanges)
         try c.encodeIfPresent(highlightDraftStart, forKey: .highlightDraftStart)
         try c.encodeIfPresent(highlightDraftDuration, forKey: .highlightDraftDuration)
+        try c.encodeIfPresent(transcript, forKey: .transcript)
+        try c.encodeIfPresent(editorState, forKey: .editorState)
         try c.encode(scrubPositionSeconds, forKey: .scrubPositionSeconds)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
@@ -252,14 +286,18 @@ struct MediaProject: Identifiable, Codable, Equatable {
     var scenes: [MediaProjectScene]
     var activeSceneId: UUID?
     var exportedClips: [StoredClipOutput]
+    /// Optional permutation into the canonical scene-then-range list.
+    /// Persisted only while its count matches the project clip count.
+    var projectExportOrder: [Int]?
+    /// Optional permutation into `savedClips`.
+    var savedClipsOrder: [Int]?
     var scrubPositionSeconds: Double
     var transcript: Transcript?
     var createdAt: Date
     var updatedAt: Date
-    /// PHAsset localIdentifier for the source video, if it came
-    /// from the Photos library. Written into `.reelclip` export
-    /// files so the recipient can resolve the source video on
-    /// their device. `nil` for file-imported videos.
+    /// PHAsset localIdentifier for local source recovery. Legacy reference-only
+    /// `.reelclip` files use it; portable v3 packages strip it because they
+    /// embed the source and should not leak sender-specific library IDs.
     var sourcePhotoLibraryIdentifier: String?
     /// User-picked export settings (resolution + frame rate).
     /// `nil` for projects created before the settings feature
@@ -297,6 +335,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         scenes: [MediaProjectScene]? = nil,
         activeSceneId: UUID? = nil,
         exportedClips: [StoredClipOutput] = [],
+        projectExportOrder: [Int]? = nil,
+        savedClipsOrder: [Int]? = nil,
         savedClips: [ClipRange] = [],
         scrubPositionSeconds: Double,
         transcript: Transcript? = nil,
@@ -349,6 +389,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         self.scenes = resolvedScenes
         self.activeSceneId = activeSceneId ?? resolvedScenes.first?.id
         self.exportedClips = exportedClips
+        self.projectExportOrder = projectExportOrder
+        self.savedClipsOrder = savedClipsOrder
         self.scrubPositionSeconds = scrubPositionSeconds
         self.transcript = transcript
         self.sourcePhotoLibraryIdentifier = sourcePhotoLibraryIdentifier
@@ -377,6 +419,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         case scenes
         case activeSceneId
         case exportedClips
+        case projectExportOrder
+        case savedClipsOrder
         case scrubPositionSeconds
         case transcript
         case sourcePhotoLibraryIdentifier
@@ -400,6 +444,8 @@ struct MediaProject: Identifiable, Codable, Equatable {
         self.sourceAspectRatio = decodedSourceAspectRatio
         self.frameDurationSeconds = decodedFrameDurationSeconds
         self.exportedClips = try container.decodeIfPresent([StoredClipOutput].self, forKey: .exportedClips) ?? []
+        self.projectExportOrder = try container.decodeIfPresent([Int].self, forKey: .projectExportOrder)
+        self.savedClipsOrder = try container.decodeIfPresent([Int].self, forKey: .savedClipsOrder)
         self.transcript = try container.decodeIfPresent(Transcript.self, forKey: .transcript)
         let decodedSourcePhotoLibraryIdentifier = try container.decodeIfPresent(String.self, forKey: .sourcePhotoLibraryIdentifier)
         self.sourcePhotoLibraryIdentifier = decodedSourcePhotoLibraryIdentifier

@@ -1,7 +1,5 @@
-// FileDocument wrapper that lets SwiftUI's `.fileExporter` present a
-// `.reelclip` file for the user to save. Reads bytes from a temp URL
-// the viewmodel prepared; on save the system writes those bytes to the
-// user-chosen destination and we delete the temp file.
+// FileDocument wrapper used by SwiftUI's `.fileExporter`. V3 exports are
+// directory FileWrappers (document packages); legacy flat files remain valid.
 
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,8 +8,7 @@ struct ReelClipProjectDocument: FileDocument {
     static var readableContentTypes: [UTType] { [UTType.reelClipProject] }
     static var writableContentTypes: [UTType] { [UTType.reelClipProject] }
 
-    /// The temp URL holding the encoded envelope bytes. The exporter
-    /// reads from here when the user picks a destination.
+    /// Temp package or legacy flat-file URL prepared by the view model.
     let url: URL?
 
     init(url: URL?) {
@@ -30,10 +27,8 @@ struct ReelClipProjectDocument: FileDocument {
             throw NSError(domain: "ReelClipProjectDocument", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "No project file to export."])
         }
-        // Read the temp bytes and hand them to FileWrapper so the system
-        // can write them to the user-chosen destination. The viewmodel
-        // deletes the temp file in the export completion handler.
-        let data = try Data(contentsOf: url)
-        return FileWrapper(regularFileWithContents: data)
+        // Empty reading options keep large media lazy instead of loading a
+        // multi-GB package into memory before the system copies it.
+        return try FileWrapper(url: url, options: [])
     }
 }

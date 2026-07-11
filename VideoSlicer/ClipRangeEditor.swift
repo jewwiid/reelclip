@@ -1,6 +1,6 @@
 import Foundation
 
-enum TimelineZoom: String, CaseIterable, Identifiable {
+enum TimelineZoom: String, CaseIterable, Identifiable, Codable {
     case fit = "Fit"
     case detail = "2x"
     case frame = "4x"
