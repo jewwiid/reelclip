@@ -186,7 +186,7 @@ struct ClipView: View {
             isPresented: $isReelClipExporterPresented,
             document: ReelClipProjectDocument(url: reelClipExportURL),
             contentType: UTType.reelClipProject,
-            defaultFilename: reelClipExportURL?.deletingPathExtension().lastPathComponent ?? "ReelClip Project"
+            defaultFilename: reelClipExportURL?.deletingPathExtension().lastPathComponent ?? "ReelClips Project"
         ) { result in
             // Tidy up the temp file regardless of outcome —
             // same pattern as HomeView's exporter handler.
@@ -527,6 +527,9 @@ struct ClipView: View {
                 .padding(.bottom, shouldShowActionDock ? 156 : 28)
                 .frame(maxWidth: .infinity)
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                StickyBrandHeader()
+            }
             .coordinateSpace(name: "editor-scroll")
             .onPreferenceChange(EditorScrollOffsetKey.self) { minY in
                 // `minY` is the y-position of the spacer's
@@ -579,13 +582,13 @@ struct ClipView: View {
     private var headerSection: AnyView {
         AnyView(
             VStack(alignment: .leading, spacing: 14) {
+                // Top row: project title (left) + Export button (right).
+                // The brand wordmark lives in StickyBrandHeader at the
+                // scroll level; the page-level header keeps the
+                // project-scoped controls only.
                 HStack(alignment: .center, spacing: 12) {
-                    AppBrandLockup(
-                        iconSize: 40,
-                        titleFont: .system(.title3, design: .rounded).weight(.black)
-                    )
-
-                    Spacer(minLength: 0)
+                    projectTitleField
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
                     projectsHeaderButton
                 }
@@ -593,10 +596,16 @@ struct ClipView: View {
                 Divider()
                     .background(AppPalette.hairline)
 
+                // Bottom row: status subtitle (left) + 720p/source pill (right).
                 HStack(alignment: .top, spacing: 12) {
-                    projectTitleBlock
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
+                    if !viewModel.isProcessing {
+                        Text(viewModel.statusMessage)
+                            .font(.subheadline)
+                            .foregroundStyle(AppPalette.secondaryText)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
                     exportSettingsPill
                 }
             }
@@ -652,56 +661,7 @@ struct ClipView: View {
     private var projectTitleBlock: AnyView {
         AnyView(
             VStack(alignment: .leading, spacing: 6) {
-                TextField(
-                    "Untitled project",
-                    text: $viewModel.projectTitleDraft
-                )
-                .font(.system(.title2, design: .rounded).weight(.black))
-                .foregroundStyle(AppPalette.primaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .focused($isProjectTitleFocused)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.words)
-                // `.toolbar(placement: .keyboard)` adds a Done
-                // button to the keyboard's accessory bar that's
-                // wired to release focus. SwiftUI's `.onSubmit`
-                // on a TextField doesn't always fire when the
-                // keyboard's green Done button is tapped on
-                // iOS 26 — this is the reliable fallback. Both
-                // paths route through the focus-release → save
-                // onChange, so the title commits either way.
-                // Don't add `.submitLabel(.done)` here — the
-                // per-field toolbar's Done is the single source
-                // of truth for the keyboard's input accessory.
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") {
-                            isProjectTitleFocused = false
-                        }
-                        .fontWeight(.semibold)
-                    }
-                }
-                .accessibilityLabel("Project title")
-                .accessibilityHint("Tap to rename this project.")
-                .onSubmit {
-                    viewModel.updateProjectTitle(viewModel.projectTitleDraft)
-                    isProjectTitleFocused = false
-                }
-                .onChange(of: isProjectTitleFocused) { _, isFocused in
-                    // Track composing state, then save on focus loss (tap outside,
-                    // dismiss keyboard, switch tabs) so the user never has to
-                    // remember to hit Done. Combined into one modifier to avoid
-                    // iOS 26.5 SwiftUI runtime corruption from stacked onChange
-                    // observers on the same value.
-                    if isFocused {
-                        isProjectTitleComposing = true
-                    } else if isProjectTitleComposing {
-                        isProjectTitleComposing = false
-                        viewModel.updateProjectTitle(viewModel.projectTitleDraft)
-                    }
-                }
+                projectTitleField
 
                 if !viewModel.isProcessing {
                     Text(viewModel.statusMessage)
@@ -709,6 +669,61 @@ struct ClipView: View {
                         .foregroundStyle(AppPalette.secondaryText)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        )
+    }
+
+    private var projectTitleField: AnyView {
+        AnyView(
+            TextField(
+                "Untitled project",
+                text: $viewModel.projectTitleDraft
+            )
+            .font(.system(.title2, design: .rounded).weight(.black))
+            .foregroundStyle(AppPalette.primaryText)
+            .lineLimit(1)
+            .minimumScaleFactor(0.78)
+            .focused($isProjectTitleFocused)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.words)
+            // `.toolbar(placement: .keyboard)` adds a Done
+            // button to the keyboard's accessory bar that's
+            // wired to release focus. SwiftUI's `.onSubmit`
+            // on a TextField doesn't always fire when the
+            // keyboard's green Done button is tapped on
+            // iOS 26 — this is the reliable fallback. Both
+            // paths route through the focus-release → save
+            // onChange, so the title commits either way.
+            // Don't add `.submitLabel(.done)` here — the
+            // per-field toolbar's Done is the single source
+            // of truth for the keyboard's input accessory.
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        isProjectTitleFocused = false
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+            .accessibilityLabel("Project title")
+            .accessibilityHint("Tap to rename this project.")
+            .onSubmit {
+                viewModel.updateProjectTitle(viewModel.projectTitleDraft)
+                isProjectTitleFocused = false
+            }
+            .onChange(of: isProjectTitleFocused) { _, isFocused in
+                // Track composing state, then save on focus loss (tap outside,
+                // dismiss keyboard, switch tabs) so the user never has to
+                // remember to hit Done. Combined into one modifier to avoid
+                // iOS 26.5 SwiftUI runtime corruption from stacked onChange
+                // observers on the same value.
+                if isFocused {
+                    isProjectTitleComposing = true
+                } else if isProjectTitleComposing {
+                    isProjectTitleComposing = false
+                    viewModel.updateProjectTitle(viewModel.projectTitleDraft)
                 }
             }
         )
@@ -794,22 +809,21 @@ struct ClipView: View {
                 // replacement remains available from the scene menu, while
                 // this control always means "start this scene over".
                 // When the scene has no content (just-reset or a fresh
-                // empty scene), the same slot flips to an Import CTA so
-                // the user has a single affordance to bring media back
-                // — no need to dig into the scene menu.
+                // empty scene), the same slot flips to an Add media CTA
+                // that opens the dedicated Files / Photos chooser.
                 let sceneIsEmpty = !viewModel.hasActiveSceneContent
                 Button {
                     guard !viewModel.isImportingMedia else { return }
                     if sceneIsEmpty {
-                        isSceneSourceFileImporterPresented = true
+                        isSceneSourceSheetPresented = true
                     } else {
                         isSceneResetConfirmationPresented = true
                     }
                     PolishKit.Haptics.tap(.medium).play()
                 } label: {
                     Label(
-                        sceneIsEmpty ? "Import" : "Reset",
-                        systemImage: sceneIsEmpty ? "square.and.arrow.down" : "arrow.counterclockwise"
+                        sceneIsEmpty ? "Add media" : "Reset",
+                        systemImage: sceneIsEmpty ? "photo.badge.plus" : "arrow.counterclockwise"
                     )
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(AppPalette.primaryText)
@@ -822,8 +836,12 @@ struct ClipView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.isImportingMedia)
-                .accessibilityLabel(sceneIsEmpty ? "Import a video into this scene" : "Reset active scene")
-                .accessibilityHint("Clears this scene while keeping the project and scene name")
+                .accessibilityLabel(sceneIsEmpty ? "Add video media to this scene" : "Reset active scene")
+                .accessibilityHint(
+                    sceneIsEmpty
+                        ? "Choose a video from Files or Photos."
+                        : "Clears this scene while keeping the project and scene name."
+                )
             }
 
             if let _ = viewModel.sourceURL {
@@ -940,38 +958,10 @@ struct ClipView: View {
             previewSizeLevelButton
                 .padding(12)
         }
-        .overlay(alignment: .topLeading) {
-            if viewModel.isGeneratingProxy || viewModel.isUsingProxy {
-                previewProxyStatus
-                    .padding(12)
-            }
-        }
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(AppPalette.hairline, lineWidth: 1)
         }
-    }
-
-    private var previewProxyStatus: some View {
-        HStack(spacing: 6) {
-            Image(systemName: viewModel.isGeneratingProxy
-                  ? "arrow.triangle.2.circlepath"
-                  : "checkmark.circle.fill")
-                .font(.caption.weight(.black))
-            Text(viewModel.isGeneratingProxy
-                 ? "Proxy \(Int((viewModel.proxyGenerationProgress * 100).rounded()))%"
-                 : "Proxy preview")
-                .font(.caption2.weight(.black))
-                .monospacedDigit()
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
-        .background(.black.opacity(0.68), in: Capsule())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(viewModel.isGeneratingProxy
-                            ? "Preparing proxy preview, \(Int((viewModel.proxyGenerationProgress * 100).rounded())) percent"
-                            : "Using proxy preview")
     }
 
     /// Bottom-left resize button. Cycles the video preview
@@ -1782,12 +1772,17 @@ struct ClipView: View {
     /// library; on selection, `onChange` routes through
     /// `replaceActiveSceneSource(from:)`.
     private var sceneSourcePickerSheet: some View {
-        VStack(spacing: 18) {
+        let hasSource = viewModel.sourceURL != nil
+        return VStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Replace source for this scene")
+                Text(hasSource ? "Replace source for this scene" : "Add media to this scene")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(AppPalette.primaryText)
-                Text("Other scenes keep their source. If this scene already has planned clips, choose whether to keep, clamp, or clear them after picking the new video.")
+                Text(
+                    hasSource
+                        ? "Other scenes keep their source. If this scene already has planned clips, choose whether to keep, clamp, or clear them after picking the new video."
+                        : "Choose a video from Files or Photos. Project files are imported separately from the Home tab."
+                )
                     .font(.subheadline)
                     .foregroundStyle(AppPalette.secondaryText)
             }
@@ -1858,17 +1853,17 @@ struct ClipView: View {
     }
 
     private var resetRecipeButton: some View {
-        // When no video is loaded, the recipe has nothing to reset
-        // — instead the button transforms into an "Import" CTA
-        // that opens the file picker. Same slot, same touch target,
+        // When no video is loaded, the recipe has nothing to reset.
+        // The same slot becomes an Add media CTA that opens the shared
+        // Files / Photos chooser. Same slot, same touch target,
         // same row layout, but the affordance matches what the
         // user actually wants to do. The Accent fill on Import
         // (vs. muted control-surface on Reset) reflects the
         // priority: getting a source loaded is the gate to every
         // other action in the editor.
         let hasSource = viewModel.sourceURL != nil
-        let title = hasSource ? "Reset" : "Import"
-        let symbol = hasSource ? "arrow.counterclockwise" : "square.and.arrow.down"
+        let title = hasSource ? "Reset" : "Add media"
+        let symbol = hasSource ? "arrow.counterclockwise" : "photo.badge.plus"
         return Button {
             if hasSource {
                 viewModel.resetCurrentRecipeFields()
@@ -1876,7 +1871,7 @@ struct ClipView: View {
             } else {
                 guard !viewModel.isImportingMedia else { return }
                 PolishKit.Haptics.tap(.medium).play()
-                isSceneSourceFileImporterPresented = true
+                isSceneSourceSheetPresented = true
             }
         } label: {
             HStack(spacing: 6) {
@@ -1896,7 +1891,7 @@ struct ClipView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(hasSource ? "Reset cut recipe to defaults" : "Import a video to start editing")
+        .accessibilityLabel(hasSource ? "Reset cut recipe to defaults" : "Add video media to start editing")
     }
 
     private var addPlanAndResetRow: some View {
@@ -2492,7 +2487,7 @@ struct ClipView: View {
                 .foregroundStyle(AppPalette.primaryText)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("ReelClip uses Apple's Foundation Models framework for AI planning. Everything runs on-device on Apple Silicon — no servers, no uploads, no API keys.")
+            Text("ReelClips uses Apple's Foundation Models framework for AI planning. Everything runs on-device on Apple Silicon — no servers, no uploads, no API keys.")
                 .font(.subheadline)
                 .foregroundStyle(AppPalette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)

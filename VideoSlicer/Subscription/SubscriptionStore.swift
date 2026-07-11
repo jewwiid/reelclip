@@ -145,7 +145,7 @@ final class SubscriptionStore: ObservableObject {
             if loadedProducts.isEmpty {
                 lastError = "No live ReelClip products were returned. Confirm the four product IDs are configured for app.reelclip.ios in App Store Connect."
             } else if !missingProductIDs.isEmpty {
-                lastError = "Some ReelClip plans are unavailable in App Store Connect."
+                lastError = "Some ReelClips plans are unavailable in App Store Connect."
             } else {
                 lastError = nil
             }

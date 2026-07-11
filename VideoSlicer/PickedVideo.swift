@@ -55,7 +55,7 @@ enum PickedVideoImportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .photosDownloadUnavailable:
-            return "Photos could not finish downloading this video. Keep ReelClip open, check your connection and free storage, then try again."
+            return "Photos could not finish downloading this video. Keep ReelClips open, check your connection and free storage, then try again."
         }
     }
 }

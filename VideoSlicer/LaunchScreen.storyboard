@@ -24,7 +24,7 @@
                                             <constraint firstAttribute="height" constant="168" id="mark-height"/>
                                         </constraints>
                                     </imageView>
-                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Really clip with ReelClip" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignCenters" adjustsFontSizeToFit="YES" translatesAutoresizingMaskIntoConstraints="NO" id="brand-slogan">
+                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Really clip with ReelClips" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignCenters" adjustsFontSizeToFit="YES" translatesAutoresizingMaskIntoConstraints="NO" id="brand-slogan">
                                         <rect key="frame" x="0.0" y="186" width="168" height="28"/>
                                         <constraints>
                                             <constraint firstAttribute="height" constant="28" id="slogan-height"/>

@@ -15,7 +15,7 @@ struct HomeView: View {
             case .loadingFromPhotos:
                 return "Loading from Photos"
             case .copyingToWorkspace:
-                return "Copying into ReelClip"
+                return "Copying into ReelClips"
             case .checkingVideo:
                 return "Checking video"
             case .ready:
@@ -117,7 +117,7 @@ struct HomeView: View {
             isPresented: $isReelClipExporterPresented,
             document: ReelClipProjectDocument(url: reelClipExportURL),
             contentType: UTType.reelClipProject,
-            defaultFilename: reelClipExportURL?.deletingPathExtension().lastPathComponent ?? "ReelClip Project"
+            defaultFilename: reelClipExportURL?.deletingPathExtension().lastPathComponent ?? "ReelClips Project"
         ) { result in
             // Tidy up the temp file regardless of outcome.
             if let url = reelClipExportURL {
@@ -204,6 +204,9 @@ struct HomeView: View {
                 .padding(.top, 18)
                 .padding(.bottom, 28)
                 .frame(maxWidth: .infinity)
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                StickyBrandHeader()
             }
         )
     }
@@ -302,16 +305,10 @@ struct HomeView: View {
     }
 
     private var projectHero: some View {
+        // Brand wordmark now lives in StickyBrandHeader (applied at
+        // homeScroll level). The hero is just the subtitle line that
+        // explains what the page is for.
         VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .center, spacing: 12) {
-                AppBrandLockup(
-                    iconSize: 46,
-                    titleFont: .system(.title2, design: .rounded).weight(.black)
-                )
-
-                Spacer(minLength: 0)
-            }
-
             VStack(alignment: .leading, spacing: 6) {
                 Text("Continue a saved cut plan or start fresh from Photos, Files, or a connected drive.")
                     .font(.subheadline)

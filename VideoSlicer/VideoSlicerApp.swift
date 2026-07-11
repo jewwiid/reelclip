@@ -52,7 +52,7 @@ private struct ReelClipLaunchOverlay: View {
                     .frame(width: 168, height: 168)
                     .scaleEffect(markScale)
 
-                Text("Really clip with ReelClip")
+                Text("Really clip with ReelClips")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(Color(red: 0.77, green: 0.94, blue: 0.20))
                     .lineLimit(1)

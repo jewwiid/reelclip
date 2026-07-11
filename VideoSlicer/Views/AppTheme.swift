@@ -53,7 +53,7 @@ struct AppBrandLockup: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(subtitle.map { "ReelClip, \($0)" } ?? "ReelClip")
+        .accessibilityLabel(subtitle.map { "ReelClips, \($0)" } ?? "ReelClips")
     }
 }
 
@@ -104,6 +104,35 @@ extension CutMode {
             return "Splice"
         case .aiAssist:
             return "AI"
+        }
+    }
+}
+
+/// Sticky top header that shows the ReelClip wordmark, applied to each
+/// of the three primary tab views via `.safeAreaInset(edge: .top)` so
+/// the brand is always present even when the user scrolls deep into
+/// the project list, the clip editor, or the settings stack.
+struct StickyBrandHeader: View {
+    var wordmarkHeight: CGFloat = 29
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Image("Wordmark")
+                .resizable()
+                .renderingMode(.original)
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(height: wordmarkHeight)
+            Spacer()
+        }
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(AppPalette.hairline)
+                .frame(height: 1 / UIScreen.main.scale)
         }
     }
 }

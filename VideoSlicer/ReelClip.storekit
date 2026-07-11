@@ -31,12 +31,12 @@
       "id": "reelclip.subscription",
       "localizations": [
         {
-          "description": "ReelClip AI-powered video clipping",
-          "displayName": "ReelClip Premium",
+          "description": "ReelClips AI-powered video clipping",
+          "displayName": "ReelClips Premium",
           "locale": "en_US"
         }
       ],
-      "name": "ReelClip Premium",
+      "name": "ReelClips Premium",
       "subscriptions": [
         {
           "adHocOffers": [],

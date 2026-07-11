@@ -12,7 +12,14 @@ struct SettingsView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        settingsHeader
+                        // Brand wordmark lives in StickyBrandHeader
+                        // (applied below). settingsHeader previously
+                        // held the AppBrandLockup; replaced with the
+                        // section break + a single subtitle line so
+                        // the page still reads as a Settings stack.
+                        Text("Manage your account, subscription, and on-device AI defaults.")
+                            .font(.subheadline)
+                            .foregroundStyle(AppPalette.secondaryText)
                         subscriptionCard
                         // AI runtime card — collapsed to a single
                         // status row now that ReelClip is strictly
@@ -28,9 +35,10 @@ struct SettingsView: View {
                     .frame(maxWidth: 760)
                     .frame(maxWidth: .infinity)
                 }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    StickyBrandHeader()
+                }
             }
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
         }
         .tint(AppPalette.accent)
     }
@@ -66,7 +74,7 @@ struct SettingsView: View {
                 appleIntelligenceStatusPill
             }
 
-            Text("ReelClip is strictly an iOS-Apple-native app: every AI run starts and finishes on your device. No API key, no cloud round-trip, nothing leaves your phone. Requires iPhone 15 Pro or later with Apple Intelligence enabled in iOS Settings.")
+            Text("ReelClips is strictly an iOS-Apple-native app: every AI run starts and finishes on your device. No API key, no cloud round-trip, nothing leaves your phone. Requires iPhone 15 Pro or later with Apple Intelligence enabled in iOS Settings.")
                 .font(.caption)
                 .foregroundStyle(AppPalette.secondaryText)
                 .lineLimit(nil)

@@ -11,7 +11,7 @@ enum MediaProxyError: LocalizedError {
         case .missingVideoTrack:
             return "The source has no playable video track."
         case .unsupportedExport:
-            return "This video cannot be converted into a ReelClip preview proxy."
+            return "This video cannot be converted into a ReelClips preview proxy."
         case .exportFailed(let message):
             return "Proxy generation failed: \(message)"
         }

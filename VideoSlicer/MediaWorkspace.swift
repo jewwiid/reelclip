@@ -115,7 +115,7 @@ enum MediaWorkspaceError: LocalizedError {
             formatter.countStyle = .file
             let required = formatter.string(fromByteCount: requiredBytes)
             let available = formatter.string(fromByteCount: availableBytes)
-            return "ReelClip needs about \(required) of free space for this operation. \(available) is currently available."
+            return "ReelClips needs about \(required) of free space for this operation. \(available) is currently available."
         }
     }
 }

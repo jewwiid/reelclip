@@ -92,7 +92,7 @@ struct PaywallView: View {
                 .shadow(color: AppPalette.accent.opacity(0.25), radius: 18, x: 0, y: 10)
 
             VStack(spacing: 5) {
-                Text("Upgrade ReelClip")
+                Text("Upgrade ReelClips")
                     .font(.system(size: 32, weight: .black, design: .rounded))
                     .foregroundStyle(AppPalette.primaryText)
                     .lineLimit(1)
@@ -379,7 +379,7 @@ struct PaywallView: View {
         .buttonStyle(.plain)
         .disabled(selectedOption == nil || isPurchasing || store.isLoading)
         .polishPressFeedback()
-        .accessibilityHint(selectedOption?.isPurchasable == true ? "Purchases the selected ReelClip plan" : "Retries loading App Store pricing")
+        .accessibilityHint(selectedOption?.isPurchasable == true ? "Purchases the selected ReelClips plan" : "Retries loading App Store pricing")
     }
 
     private var legalFooter: some View {

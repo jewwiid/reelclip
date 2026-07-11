@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>ReelClip</string>
+	<string>ReelClips</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -26,7 +26,7 @@
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>ReelClip Project</string>
+			<string>ReelClips Project</string>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
@@ -45,7 +45,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>com.reelclip.project</string>
 			<key>UTTypeDescription</key>
-			<string>ReelClip Project</string>
+			<string>ReelClips Project</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
@@ -77,11 +77,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>ReelClip saves your generated clips to your photo library.</string>
+	<string>ReelClips saves your generated clips to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ReelClip lets you choose videos from your library to split into shorter clips.</string>
+	<string>ReelClips lets you choose videos from your library to split into shorter clips.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>ReelClip transcribes the audio of your imported videos on-device so you can preview the transcript alongside the planned clips.</string>
+	<string>ReelClips transcribes the audio of your imported videos on-device so you can preview the transcript alongside the planned clips.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

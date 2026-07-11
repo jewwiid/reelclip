@@ -3707,7 +3707,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                     : "Rendering \(totalClips) clips...")
             let exportProjectTitle = currentProjectTitle
             await exportNotifications.prepareForExportNotifications()
-            exportBackgroundTasks.beginExportTask(named: "ReelClip Preview") { [weak self] in
+            exportBackgroundTasks.beginExportTask(named: "ReelClips Preview") { [weak self] in
                 self?.processingTask?.cancel()
                 self?.statusMessage = "Preview stopped while the app was in the background."
             }

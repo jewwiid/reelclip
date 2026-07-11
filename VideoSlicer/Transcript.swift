@@ -90,7 +90,7 @@ extension Transcript {
     /// `WEBVTT` header block and a small index header.
     func exportVTT() -> String {
         var output = "WEBVTT\n"
-        output += "NOTE ReelClip transcript export\n\n"
+        output += "NOTE ReelClips transcript export\n\n"
         for (index, segment) in segments.enumerated() {
             let start = Self.formatVTTTime(segment.startSeconds)
             let end = Self.formatVTTTime(segment.endSeconds)
