@@ -113,7 +113,7 @@ extension CutMode {
 /// the brand is always present even when the user scrolls deep into
 /// the project list, the clip editor, or the settings stack.
 struct StickyBrandHeader: View {
-    var wordmarkHeight: CGFloat = 29
+    var wordmarkHeight: CGFloat = 38
 
     var body: some View {
         HStack {
