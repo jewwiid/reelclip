@@ -126,7 +126,7 @@ struct StickyBrandHeader: View {
                 .frame(height: wordmarkHeight)
             Spacer()
         }
-        .padding(.vertical, 10)
+        .padding(.vertical, 14)
         .frame(maxWidth: .infinity)
         .background(.regularMaterial)
         .overlay(alignment: .bottom) {
