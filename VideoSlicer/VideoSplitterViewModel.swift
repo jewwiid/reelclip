@@ -5864,42 +5864,58 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         randomizeInterval: Bool,
         generator: inout FixedRecipeRandomGenerator
     ) -> [ClipRange] {
+        // Honour the user's count as the source of truth. When a count is
+        // requested, scale the per-clip span to `totalDuration / count` so
+        // the user always gets exactly the count they asked for. The random
+        // range acts as a preference — the algorithm can drop below the
+        // configured lower bound to fit the count, and the very last clip
+        // may be shorter than the rest to consume the trailing source.
+        // No count, no cap: walk until the source is consumed (subject to
+        // the configured bounds).
+        let count = max(1, requestedCount)
+        let perClip = totalDuration / Double(count)
+        let spanFloor = max(minimumDuration, min(perClip, totalDuration))
+
         let durationBounds = normalizedRandomRange(
             durationRange,
-            fallback: anchorDuration,
-            minimum: minimumDuration,
+            fallback: perClip,
+            minimum: spanFloor,
             maximum: totalDuration
         )
         let intervalBounds = normalizedRandomRange(
             intervalRange,
-            fallback: anchorInterval,
-            minimum: minimumDuration,
+            fallback: perClip,
+            minimum: spanFloor,
             maximum: totalDuration
         )
-        let durationLower = randomizeDuration ? durationBounds.lowerBound : min(max(anchorDuration, minimumDuration), totalDuration)
+        let durationLower = randomizeDuration
+            ? min(durationBounds.lowerBound, perClip)
+            : min(max(anchorDuration, spanFloor), totalDuration)
         let durationUpper = randomizeDuration ? durationBounds.upperBound : durationLower
-        let intervalLower = randomizeInterval ? intervalBounds.lowerBound : min(max(anchorInterval, minimumDuration), totalDuration)
+        let intervalLower = randomizeInterval
+            ? min(intervalBounds.lowerBound, perClip)
+            : min(max(anchorInterval, spanFloor), totalDuration)
         let intervalUpper = randomizeInterval ? intervalBounds.upperBound : intervalLower
         let minimumStep = max(durationLower, intervalLower)
-        guard minimumStep > 0, totalDuration >= durationLower else { return [] }
-
-        let physicalMaximumCount = Int(((totalDuration - durationLower) / minimumStep).rounded(.down)) + 1
-        let targetCount = min(requestedCount, max(0, physicalMaximumCount))
-        guard targetCount > 0 else { return [] }
+        guard minimumStep > 0, totalDuration >= minimumDuration else { return [] }
 
         var ranges: [ClipRange] = []
         var start = 0.0
 
-        for index in 0..<targetCount {
+        for index in 0..<count {
             guard start < totalDuration else { break }
-            let clipsLeftAfterThis = targetCount - index - 1
+            let clipsLeftAfterThis = count - index - 1
             let maxSpan = totalDuration - start - Double(clipsLeftAfterThis) * minimumStep
-            guard maxSpan >= durationLower else { break }
+            // Allow the last clip to be shorter than `durationLower` (down
+            // to `minimumDuration`) so the user's count is honoured even
+            // when the source can't fit evenly-spaced full-size clips.
+            guard maxSpan >= minimumDuration else { break }
 
             let span: Double
             if randomizeDuration {
-                let upper = max(durationLower, min(durationUpper, maxSpan))
-                span = Double.random(in: durationLower...upper, using: &generator)
+                let effectiveLower = min(durationLower, maxSpan)
+                let upper = max(effectiveLower, min(durationUpper, maxSpan))
+                span = Double.random(in: effectiveLower...upper, using: &generator)
             } else {
                 span = min(durationLower, maxSpan)
             }
@@ -5909,7 +5925,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
             guard clipsLeftAfterThis > 0 else { continue }
             let minStepForThisClip = max(span, intervalLower)
-            let maxStepForFit = totalDuration - start - Double(clipsLeftAfterThis - 1) * minimumStep - durationLower
+            let maxStepForFit = totalDuration - start - Double(clipsLeftAfterThis - 1) * minimumStep - minimumDuration
             guard maxStepForFit >= minStepForThisClip else { break }
 
             let step: Double
