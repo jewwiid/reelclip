@@ -8,6 +8,8 @@ struct ImportedSourceCopy: Sendable {
 }
 
 struct MediaWorkspace {
+    private static let thumbnailCacheVersion = 2
+
     let rootDirectory: URL
     let fileManager: FileManager
 
@@ -118,7 +120,7 @@ struct MediaWorkspace {
         let key = derivedMediaKey(
             for: sourceURL,
             kind: "thumbnails",
-            variant: "\(durationSeconds)-\(targetCount)-\(Int(maximumSize.width))x\(Int(maximumSize.height))"
+            variant: "v\(Self.thumbnailCacheVersion)-\(durationSeconds)-\(targetCount)-\(Int(maximumSize.width))x\(Int(maximumSize.height))"
         )
         let directory = derivedMediaDirectory.appendingPathComponent("\(key).thumbnails", isDirectory: true)
         let manifestURL = directory.appendingPathComponent("manifest.json")
@@ -149,7 +151,7 @@ struct MediaWorkspace {
         let key = derivedMediaKey(
             for: sourceURL,
             kind: "thumbnails",
-            variant: "\(durationSeconds)-\(targetCount)-\(Int(maximumSize.width))x\(Int(maximumSize.height))"
+            variant: "v\(Self.thumbnailCacheVersion)-\(durationSeconds)-\(targetCount)-\(Int(maximumSize.width))x\(Int(maximumSize.height))"
         )
         let directory = derivedMediaDirectory.appendingPathComponent("\(key).thumbnails", isDirectory: true)
         try? createDirectoryIfNeeded(directory)

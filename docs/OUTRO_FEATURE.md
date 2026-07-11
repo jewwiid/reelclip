@@ -13,18 +13,19 @@ exports are completely clean — no outro, no overlay, no branding of any kind.
 
 ## What the outro renders
 
-A 3-second animated bumper composited onto a solid black background:
+A 3-second animated bumper composited onto a solid black background. It uses
+only the transparent ReelClip icon mark, with no headline, handle, app-icon
+tile, or other overlay:
 
 | Time          | Element                                            |
 |---------------|----------------------------------------------------|
-| 0.00 – 0.40 s | Logo fades + scales 0.6 → 1.0 (ease-out)           |
-| 0.40 – 0.80 s | "Made with ReelClip" headline fades in (heavy)     |
-| 0.80 – 1.10 s | "@reelclip" handle fades in (semibold, 85% white)  |
-| 1.10 – 2.70 s | Static hold                                        |
+| 0.00 – 0.40 s | Icon mark fades + scales 0.72 → 1.0 (ease-out)     |
+| 0.40 – 2.70 s | Centred icon mark holds                            |
 | 2.70 – 3.00 s | Whole group fades out                              |
 
-Logo: `ReelClipProjectIcon-320.png` (320×320, already in the bundle), falls
-back to `AppIcon` from the asset catalog if the PNG is missing.
+Logo: `LogoMark` from the asset catalog. It is the transparent icon artwork
+used by the launch screen. There is deliberately no app-icon fallback because
+the app icon includes a square background.
 
 Render size + frame duration are derived from the source clip's video track so
 the outro matches whatever the user picked for export resolution and frame
@@ -47,11 +48,11 @@ rate — no letterboxing, no resampling.
 
 `OutroRenderer.composition(renderSize:frameDuration:)` returns a tuple of:
 
-1. An `AVMutableComposition` containing a single 3-second H.264 video track
-   rendered from a single black frame held for the full duration (cheaper than
-   rendering 90 distinct black frames).
+1. An `AVMutableComposition` containing a 3-second H.264 black-background
+   video track with a real frame sequence, which avoids unreliable single-frame
+   stretching across export presets.
 2. A matching `AVMutableVideoComposition` with a `CoreAnimationTool` that
-   composites the logo + text layer tree on top of those frames.
+   composites the centred icon-mark layer on top of those frames.
 
 `VideoSegmenter.appendOutro(to:in:index:)` then:
 
@@ -83,6 +84,8 @@ whole export.
 Added to `VideoSegmenterTests`:
 
 - `testOutroDurationConstantIsThreeSeconds` — sanity check on `OutroRenderer.duration`
+- `testOutroMarkIsCenteredForPortraitAndLandscapeExports` — mark stays centred
+- `testOutroOverlayContainsOnlyTheIconLayer` — no text/tile layers and asset loads
 - `testOutroCompositionHasThreeSecondDuration` — composition reports 3 s
 - `testShouldAppendOutroIsTrueForFreeTier` — gate returns `true` for `.free`
 - `testShouldAppendOutroIsFalseForCreatorTier` — gate returns `false` for `.creator`
@@ -92,9 +95,8 @@ Added to `VideoSegmenterTests`:
 ## Tier-mapping rationale
 
 - **Free**: the outro is the entire branding surface. Showing both a corner
-  pill AND a 3 s outro would be redundant and feel punishing. The outro also
-  doubles as a watermark *and* a CTA — creator name + handle — which is more
-  valuable to free users than a static pill they learn to ignore.
+  pill and a 3-second outro would be redundant. The centred icon mark keeps the
+  branding clear without covering the user's footage.
 - **Creator**: paid users paid to remove watermarks. Layering *any* branding
   on their clips breaks the contract. Clean export is the deliverable.
 
@@ -106,15 +108,9 @@ Added to `VideoSegmenterTests`:
 - **No template picker.** The outro is hard-coded to one design. If we want
   multiple styles, `OutroRenderer` needs to take a `template: OutroTemplate`
   parameter and the cache dir key needs to encode the template.
-- **Logo asset coupling.** If the 320×320 PNG is renamed or moved, the
-  fallback `AppIcon` may render at the wrong scale (it's a 1024×1024 asset
-  catalog entry). Acceptable for now — `loadLogoImage()` is the single
-  extension point for swapping the logo.
-- **Test target compile state.** The broader `VideoSlicerTests` target
-  doesn't compile right now due to pre-existing missing types
-  (`MiniMaxEditPlanner`, `HighlightAnalyzer`, etc. — part of an in-progress
-  AI-provider refactor). The 6 new Outro tests compile fine in isolation
-  once the unrelated refactor lands.
+- **Logo asset coupling.** If `LogoMark` is renamed or removed, the outro stays
+  black rather than falling back to a square app icon. `loadLogoImage()` is the
+  single extension point for swapping the mark.
 - **Caches dir growth.** Each outro render writes a ~2 KB black-frame MOV to
   the caches dir. iOS reaps these automatically, but a long export run
   leaves dozens of them. Acceptable; flagged here so it's not a surprise.

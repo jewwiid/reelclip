@@ -801,6 +801,35 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertEqual(CMTimeGetSeconds(OutroRenderer.duration), 3.0, accuracy: 0.01)
     }
 
+    func testOutroMarkIsCenteredForPortraitAndLandscapeExports() {
+        for renderSize in [
+            CGSize(width: 1080, height: 1920),
+            CGSize(width: 1920, height: 1080)
+        ] {
+            let frame = OutroRenderer.markFrame(
+                in: renderSize,
+                imageSize: CGSize(width: 834, height: 1024)
+            )
+
+            XCTAssertEqual(frame.midX, renderSize.width / 2, accuracy: 0.001)
+            XCTAssertEqual(frame.midY, renderSize.height / 2, accuracy: 0.001)
+            XCTAssertGreaterThan(frame.width, 0)
+            XCTAssertGreaterThan(frame.height, 0)
+        }
+    }
+
+    func testOutroOverlayContainsOnlyTheIconLayer() {
+        let overlay = OutroRenderer.makeOverlayLayer(
+            for: CGSize(width: 1280, height: 720),
+            contentsScale: 2,
+            overlayStartTime: .zero
+        )
+
+        XCTAssertEqual(overlay.sublayers?.count, 1)
+        XCTAssertFalse(overlay.sublayers?.contains(where: { $0 is CATextLayer }) ?? true)
+        XCTAssertNotNil(overlay.sublayers?.first?.contents)
+    }
+
     func testOutroCompositionHasThreeSecondDuration() async throws {
         let result = await OutroRenderer.composition(
             renderSize: CGSize(width: 1280, height: 720),

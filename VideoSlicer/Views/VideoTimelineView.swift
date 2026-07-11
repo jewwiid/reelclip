@@ -265,7 +265,11 @@ struct VideoTimelineView: View {
                     .offset(x: leftX, y: 0)
             }
         }
-        .frame(width: timeline.width, height: stripHeight)
+        // `offset(x:)` changes drawing position, not the ZStack's measured
+        // width. Without a leading frame alignment SwiftUI centres that
+        // narrow measured stack inside the full timeline, leaving roughly
+        // half the strip black before the first thumbnail appears.
+        .frame(width: timeline.width, height: stripHeight, alignment: .topLeading)
     }
 
     private func scrubIndicator(timeline: TimelineGeometry, height: CGFloat) -> some View {

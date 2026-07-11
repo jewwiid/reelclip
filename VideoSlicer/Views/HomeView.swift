@@ -548,27 +548,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var projectLibraryContent: some View {
-        if viewModel.projects.isEmpty {
-            // Tappable empty state. Tap → opens the system file
-            // importer filtered to .reelclip. Different intent from
-            // the "Tap to start a project" card above: that one
-            // creates a NEW project from a video, this one
-            // restores an EXISTING project from a portable file.
-            // Copy is action-oriented — "import a .reelclip file
-            // you've shared or backed up".
-            PolishKit.EmptyStateView(
-                systemImage: "square.stack.3d.up.slash",
-                title: "Tap to import a .reelclip file",
-                message: "Restored projects come back with every scene, planned clip, mode, and prompt intact. Use this for backups or files you've shared.",
-                accent: AppPalette.accent,
-                actionTitle: nil,
-                action: nil,
-                onTap: {
-                    guard !viewModel.isImportingMedia else { return }
-                    isReelClipImporterPresented = true
-                }
-            )
-        } else {
+        if !viewModel.projects.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 sectionTitle(
                     "Recent projects",

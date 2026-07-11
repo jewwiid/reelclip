@@ -1,12 +1,11 @@
 @preconcurrency import AVFoundation
 import Foundation
 import UIKit
-import CoreImage
 
 /// Composes a 3-second animated outro that is appended to the end of every
-/// exported clip. The outro renders a centred logo + brand line + handle on
-/// a solid background, with a fade-scale-in entrance and a brief fade-out
-/// exit.
+/// exported clip. The outro renders the transparent ReelClip icon mark,
+/// centred on a solid background, with a fade-scale-in entrance and a brief
+/// fade-out exit.
 ///
 /// The renderer produces an `AVMutableComposition` (one black-background
 /// video track, exactly `OutroRenderer.duration` long) plus the matching
@@ -21,17 +20,9 @@ import CoreImage
 /// than the clip it sits next to.
 enum OutroRenderer {
 
-    /// Total outro length. 3 seconds is the sweet spot for Reels / TikTok /
-    /// Shorts: long enough for the logo + handle to read, short enough that
-    /// viewers don't bounce before the clip's CTA beat.
+    /// Total outro length. Three seconds keeps the brand mark readable without
+    /// adding a long tail to short-form exports.
     static let duration: CMTime = CMTime(seconds: 3, preferredTimescale: 600)
-
-    /// Headline text on the outro. Single source of truth so unit tests can
-    /// assert against the same string the UI renders.
-    static let headlineText = "Made with ReelClip"
-
-    /// Secondary handle line. Sized smaller than the headline.
-    static let handleText = "@reelclip"
 
     /// Async factory. Writes a tiny black-frame MOV to the caches dir, then
     /// returns the outro composition + matching video composition with the
@@ -249,15 +240,10 @@ enum OutroRenderer {
 
     // MARK: - Overlay layer
 
-    /// Build the centred logo + headline + handle layer tree and attach the
-    /// animation timeline. Animation timing (all relative to t=0):
-    ///
-    /// - 0.00–0.40 s : logo opacity 0→1 + scale 0.6→1.0 (ease-out)
-    /// - 0.40–0.80 s : headline opacity 0→1 (ease-in)
-    /// - 0.80–1.10 s : handle opacity 0→1 (ease-in)
-    /// - 1.10–2.70 s : static hold (no animations firing)
-    /// - 2.70–3.00 s : whole outro group opacity 1→0 (ease-out)
-    private static func makeOverlayLayer(
+    /// Build the centred icon-mark layer and attach the animation timeline.
+    /// The mark fades and scales in over 0.4 seconds, holds, then fades out
+    /// over the final 0.3 seconds.
+    static func makeOverlayLayer(
         for renderSize: CGSize,
         contentsScale: CGFloat,
         overlayStartTime: CMTime
@@ -266,80 +252,20 @@ enum OutroRenderer {
         group.frame = CGRect(origin: .zero, size: renderSize)
         let overlayOffset = max(0, CMTimeGetSeconds(overlayStartTime))
 
-        // --- Logo ---------------------------------------------------------
-        // The logo is loaded from the bundle. If the asset is missing the
-        // logo layer renders empty — the text layers still appear so the
-        // outro is never blank. (Tests assert this behaviour explicitly.)
-        let logoSide = min(renderSize.width, renderSize.height) * 0.22
-        let logoRect = CGRect(
-            x: (renderSize.width - logoSide) / 2,
-            y: (renderSize.height - logoSide) / 2 - renderSize.height * 0.06,
-            width: logoSide,
-            height: logoSide
-        )
+        let logoImage = loadLogoImage()
         let logoLayer = CALayer()
-        logoLayer.frame = logoRect
-        logoLayer.contents = loadLogoImage()?.cgImage
+        logoLayer.frame = markFrame(
+            in: renderSize,
+            imageSize: logoImage?.size ?? CGSize(width: 834, height: 1024)
+        )
+        logoLayer.contents = logoImage?.cgImage
         logoLayer.contentsGravity = .resizeAspect
         logoLayer.contentsScale = contentsScale
         logoLayer.opacity = 0
-        logoLayer.transform = CATransform3DMakeScale(0.6, 0.6, 1)
-
-        // --- Headline -----------------------------------------------------
-        let headlineHeight = renderSize.height * 0.045
-        let headlineRect = CGRect(
-            x: 0,
-            y: logoRect.maxY + renderSize.height * 0.035,
-            width: renderSize.width,
-            height: headlineHeight
-        )
-        let headlineLayer = CATextLayer()
-        headlineLayer.frame = headlineRect
-        headlineLayer.alignmentMode = .center
-        headlineLayer.string = NSAttributedString(
-            string: headlineText,
-            attributes: [
-                .font: UIFont.systemFont(ofSize: headlineHeight * 0.85, weight: .heavy),
-                .foregroundColor: UIColor.white
-            ]
-        )
-        headlineLayer.foregroundColor = UIColor.white.cgColor
-        headlineLayer.fontSize = headlineHeight * 0.85
-        headlineLayer.font = UIFont.systemFont(ofSize: headlineHeight * 0.85, weight: .heavy)
-        headlineLayer.contentsScale = contentsScale
-        headlineLayer.opacity = 0
-
-        // --- Handle -------------------------------------------------------
-        let handleHeight = renderSize.height * 0.028
-        let handleRect = CGRect(
-            x: 0,
-            y: headlineRect.maxY + renderSize.height * 0.012,
-            width: renderSize.width,
-            height: handleHeight
-        )
-        let handleLayer = CATextLayer()
-        handleLayer.frame = handleRect
-        handleLayer.alignmentMode = .center
-        let handleFontSize = handleHeight * 0.85
-        handleLayer.string = NSAttributedString(
-            string: handleText,
-            attributes: [
-                .font: UIFont.systemFont(ofSize: handleFontSize, weight: .semibold),
-                .foregroundColor: UIColor.white.withAlphaComponent(0.85)
-            ]
-        )
-        handleLayer.foregroundColor = UIColor.white.withAlphaComponent(0.85).cgColor
-        handleLayer.fontSize = handleFontSize
-        handleLayer.font = UIFont.systemFont(ofSize: handleFontSize, weight: .semibold)
-        handleLayer.contentsScale = contentsScale
-        handleLayer.opacity = 0
+        logoLayer.transform = CATransform3DMakeScale(0.72, 0.72, 1)
 
         group.addSublayer(logoLayer)
-        group.addSublayer(headlineLayer)
-        group.addSublayer(handleLayer)
 
-        // --- Animations ---------------------------------------------------
-        // Logo fade + scale-in
         addOpacityAnimation(
             to: logoLayer,
             from: 0, to: 1,
@@ -347,26 +273,9 @@ enum OutroRenderer {
         )
         addScaleAnimation(
             to: logoLayer,
-            from: 0.6, to: 1.0,
+            from: 0.72, to: 1.0,
             startSeconds: overlayOffset, durationSeconds: 0.4
         )
-
-        // Headline fade-in
-        addOpacityAnimation(
-            to: headlineLayer,
-            from: 0, to: 1,
-            startSeconds: overlayOffset + 0.4, durationSeconds: 0.4
-        )
-
-        // Handle fade-in
-        addOpacityAnimation(
-            to: handleLayer,
-            from: 0, to: 1,
-            startSeconds: overlayOffset + 0.8, durationSeconds: 0.3
-        )
-
-        // Group fade-out at the end. Animates from 1 → 0 on the parent so
-        // the entire outro dissolves cleanly into the end of the timeline.
         addOpacityAnimation(
             to: group,
             from: 1, to: 0,
@@ -374,6 +283,31 @@ enum OutroRenderer {
         )
 
         return group
+    }
+
+    static func markFrame(in renderSize: CGSize, imageSize: CGSize) -> CGRect {
+        guard
+            renderSize.width > 0,
+            renderSize.height > 0,
+            imageSize.width > 0,
+            imageSize.height > 0
+        else { return .zero }
+
+        let maximumDimension = min(renderSize.width, renderSize.height) * 0.34
+        let aspectRatio = imageSize.width / imageSize.height
+        let markSize: CGSize
+        if aspectRatio <= 1 {
+            markSize = CGSize(width: maximumDimension * aspectRatio, height: maximumDimension)
+        } else {
+            markSize = CGSize(width: maximumDimension, height: maximumDimension / aspectRatio)
+        }
+
+        return CGRect(
+            x: (renderSize.width - markSize.width) / 2,
+            y: (renderSize.height - markSize.height) / 2,
+            width: markSize.width,
+            height: markSize.height
+        )
     }
 
     private static func addOpacityAnimation(
@@ -412,60 +346,10 @@ enum OutroRenderer {
         layer.add(animation, forKey: "outro-scale-\(startSeconds)")
     }
 
-    /// Load the bundled logo and remove the baked square artwork from the
-    /// source PNG. The project icon is also used by the app shell, so it is
-    /// intentionally kept unchanged on disk; the outro gets a transparent
-    /// lime mark at render time instead of a white/dark tile.
+    /// Load the transparent icon mark directly from the asset catalog. Do not
+    /// fall back to the app icon because that would reintroduce its square
+    /// background into exported video.
     private static func loadLogoImage() -> UIImage? {
-        let image: UIImage?
-        if let url = Bundle.main.url(
-            forResource: "ReelClipProjectIcon-320",
-            withExtension: "png"
-        ),
-            let data = try? Data(contentsOf: url),
-            let bundledImage = UIImage(data: data) {
-            image = bundledImage
-        } else {
-            image = UIImage(named: "AppIcon")
-        }
-        guard let image else { return nil }
-        return transparentMark(from: image)
-    }
-
-    private static func transparentMark(from image: UIImage) -> UIImage? {
-        guard let source = image.cgImage else { return nil }
-
-        let width = source.width
-        let height = source.height
-        let bytesPerRow = width * 4
-        var pixels = [UInt8](repeating: 0, count: height * bytesPerRow)
-        guard let context = CGContext(
-            data: &pixels,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        for index in stride(from: 0, to: pixels.count, by: 4) {
-            let red = pixels[index]
-            let green = pixels[index + 1]
-            let blue = pixels[index + 2]
-            let maximum = max(red, max(green, blue))
-            let minimum = min(red, min(green, blue))
-
-            // The source icon has a white outer field and a dark rounded
-            // square. Both are background; the lime mark remains opaque.
-            if maximum < 115 || minimum > 232 {
-                pixels[index + 3] = 0
-            }
-        }
-
-        guard let output = context.makeImage() else { return nil }
-        return UIImage(cgImage: output, scale: image.scale, orientation: image.imageOrientation)
+        UIImage(named: "LogoMark")
     }
 }
