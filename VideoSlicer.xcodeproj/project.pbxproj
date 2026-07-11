@@ -17,6 +17,7 @@
 		1A2B3C4D5E6F700000000009 /* SmartCutAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001A /* SmartCutAnalyzer.swift */; };
 		1A2B3C4D5E6F70000000000E /* MediaWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F70000000001F /* MediaWorkspace.swift */; };
 		1A2B3C4D5E6F70000000000F /* MediaPreviewGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */; };
+		1A2B3C4D5E6F700000000410 /* MediaProxyGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000411 /* MediaProxyGenerator.swift */; };
 		1A2B3C4D5E6F700000000023 /* ClipRangeEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000025 /* ClipRangeEditor.swift */; };
 		1A2B3C4D5E6F700000000024 /* WaveformAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000026 /* WaveformAnalyzer.swift */; };
 		1A2B3C4D5E6F700000000027 /* MediaProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000028 /* MediaProjectStore.swift */; };
@@ -94,6 +95,7 @@
 		1A2B3C4D5E6F70000000001E /* AIFeatureReadiness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIFeatureReadiness.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F70000000001F /* MediaWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaWorkspace.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreviewGenerator.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000411 /* MediaProxyGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaProxyGenerator.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000025 /* ClipRangeEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipRangeEditor.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000026 /* WaveformAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaveformAnalyzer.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000028 /* MediaProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaProjectStore.swift; sourceTree = "<group>"; };
@@ -212,6 +214,7 @@
 				1A2B3C4D5E6F700000000028 /* MediaProjectStore.swift */,
 				1A2B3C4D5E6F70000000002E /* MediaProcessingLimits.swift */,
 				1A2B3C4D5E6F700000000022 /* MediaPreviewGenerator.swift */,
+				1A2B3C4D5E6F700000000411 /* MediaProxyGenerator.swift */,
 				1A2B3C4D5E6F700000000026 /* WaveformAnalyzer.swift */,
 				1A2B3C4D5E6F70000000001A /* SmartCutAnalyzer.swift */,
 				1A2B3C4D5E6F700000000035 /* ExportNotificationManager.swift */,
@@ -403,6 +406,7 @@
 				1A2B3C4D5E6F70000000002D /* MediaProcessingLimits.swift in Sources */,
 				1A2B3C4D5E6F70000000001D /* AIFeatureReadiness.swift in Sources */,
 				1A2B3C4D5E6F70000000000F /* MediaPreviewGenerator.swift in Sources */,
+				1A2B3C4D5E6F700000000410 /* MediaProxyGenerator.swift in Sources */,
 				1A2B3C4D5E6F700000000024 /* WaveformAnalyzer.swift in Sources */,
 				1A2B3C4D5E6F700000000009 /* SmartCutAnalyzer.swift in Sources */,
 				1A2B3C4D5E6F700000000034 /* ExportNotificationManager.swift in Sources */,
@@ -566,7 +570,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 121;
+				CURRENT_PROJECT_VERSION = 126;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VideoSlicer/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -591,7 +595,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 121;
+				CURRENT_PROJECT_VERSION = 126;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VideoSlicer/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -617,7 +621,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 121;
+				CURRENT_PROJECT_VERSION = 126;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -641,7 +645,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 121;
+				CURRENT_PROJECT_VERSION = 126;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

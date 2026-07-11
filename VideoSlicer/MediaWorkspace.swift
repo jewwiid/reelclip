@@ -7,6 +7,119 @@ struct ImportedSourceCopy: Sendable {
     let wasCreated: Bool
 }
 
+typealias MediaImportProgressHandler = @Sendable (Double) -> Void
+
+enum MediaImportError: LocalizedError {
+    case iCloudDownloadFailed(reason: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .iCloudDownloadFailed(let reason):
+            return reason
+        }
+    }
+}
+
+/// Resolves a possibly-cloud-backed file URL to a local copy before
+/// downstream code reads its bytes. iOS Files returns placeholder URLs
+/// for iCloud Drive (and other cloud-backed providers) where the file
+/// metadata is local but the actual content lives in the cloud. Reading
+/// such a URL before iOS has finished downloading it produces a
+/// "file doesn't exist" error even though the file is reachable.
+///
+/// Throws `MediaImportError.iCloudDownloadFailed` if the URL doesn't
+/// materialise within 60 seconds, if iOS refuses to start the download
+/// (file removed from cloud, user signed out, etc.), or if the download
+/// status flips back to `.notDownloaded` mid-flight.
+enum MediaImportPreparation {
+    /// Returns once the URL points at locally-available bytes, or
+    /// throws if the file can't be materialised in 60 seconds. Non-iCloud
+    /// URLs are returned immediately with `progress(1)` reported.
+    static func ensureFileIsLocal(
+        _ url: URL,
+        progress: @escaping MediaImportProgressHandler
+    ) async throws {
+        let values = try url.resourceValues(forKeys: [
+            .isUbiquitousItemKey,
+            .ubiquitousItemDownloadingStatusKey
+        ])
+
+        // Not an iCloud URL — file is already local, nothing to do.
+        guard values.isUbiquitousItem == true else {
+            progress(1)
+            return
+        }
+
+        // Already downloaded — confirm and move on.
+        if values.ubiquitousItemDownloadingStatus == .current {
+            progress(1)
+            return
+        }
+
+        // Kick off the download. Throws if the file was removed from
+        // iCloud or the user is signed out — surface that as a clear error.
+        do {
+            try FileManager.default.startDownloadingUbiquitousItem(at: url)
+        } catch {
+            throw MediaImportError.iCloudDownloadFailed(
+                reason: "Couldn't start the iCloud download. Make sure you're signed in and the file is still in iCloud Drive. (\(error.localizedDescription))"
+            )
+        }
+
+        let deadline = Date().addingTimeInterval(60)
+        var lastFraction: Double = 0
+        while Date() < deadline {
+            let v = try? url.resourceValues(forKeys: [
+                .ubiquitousItemDownloadingStatusKey
+            ])
+
+            // While the file is still in the cloud (i.e. not yet
+            // downloaded), linearly interpolate progress so the UI
+            // shows movement. The status only flips from
+            // `.notDownloaded` to `.current` once the bytes are
+            // actually local, so any "in flight" state reads back as
+            // `.notDownloaded` here.
+            if v?.ubiquitousItemDownloadingStatus == .notDownloaded,
+               lastFraction < 0.9 {
+                lastFraction = min(lastFraction + 0.1, 0.9)
+                progress(lastFraction)
+            }
+
+            switch v?.ubiquitousItemDownloadingStatus {
+            case .current:
+                progress(1)
+                return
+            case .notDownloaded:
+                // Still in the cloud; keep polling.
+                break
+            default:
+                break
+            }
+
+            try await Task.sleep(nanoseconds: 250_000_000) // 250ms
+        }
+
+        throw MediaImportError.iCloudDownloadFailed(
+            reason: "iCloud download timed out after 60 seconds. Try again with a stronger connection."
+        )
+    }
+}
+
+enum MediaWorkspaceError: LocalizedError {
+    case insufficientStorage(requiredBytes: Int64, availableBytes: Int64)
+
+    var errorDescription: String? {
+        switch self {
+        case .insufficientStorage(let requiredBytes, let availableBytes):
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            let required = formatter.string(fromByteCount: requiredBytes)
+            let available = formatter.string(fromByteCount: availableBytes)
+            return "ReelClip needs about \(required) of free space for this operation. \(available) is currently available."
+        }
+    }
+}
+
 struct MediaWorkspace {
     private static let thumbnailCacheVersion = 2
 
@@ -41,14 +154,38 @@ struct MediaWorkspace {
         rootDirectory.appendingPathComponent("Derived", isDirectory: true)
     }
 
+    var proxiesDirectory: URL {
+        derivedMediaDirectory.appendingPathComponent("Proxies", isDirectory: true)
+    }
+
     func prepareBaseDirectories() throws {
         try createDirectoryIfNeeded(rootDirectory)
         try createDirectoryIfNeeded(importsDirectory)
         try createDirectoryIfNeeded(exportsDirectory)
         try createDirectoryIfNeeded(projectsDirectory)
         try createDirectoryIfNeeded(derivedMediaDirectory)
+        try createDirectoryIfNeeded(proxiesDirectory)
         try? excludeFromBackup(exportsDirectory)
         try? excludeFromBackup(derivedMediaDirectory)
+    }
+
+    func proxyURL(for sourceURL: URL) throws -> URL {
+        try prepareBaseDirectories()
+        let key = derivedMediaKey(
+            for: sourceURL,
+            kind: "proxy",
+            variant: "v1-720p-h264"
+        )
+        return proxiesDirectory.appendingPathComponent("\(key).proxy.mp4")
+    }
+
+    func cachedProxyURL(for sourceURL: URL) -> URL? {
+        guard let url = try? proxyURL(for: sourceURL),
+              fileManager.fileExists(atPath: url.path),
+              fileSize(at: url) > 0 else {
+            return nil
+        }
+        return url
     }
 
     /// Stable cache key for derived media. The source path is included so a
@@ -59,14 +196,13 @@ struct MediaWorkspace {
         kind: String,
         variant: String
     ) -> String {
-        let values = try? sourceURL.resourceValues(forKeys: [
-            .fileSizeKey,
-            .contentModificationDateKey
-        ])
+        let attributes = try? fileManager.attributesOfItem(atPath: sourceURL.path)
+        let fileSize = (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        let modificationDate = attributes?[.modificationDate] as? Date
         let fingerprint = [
             sourceURL.standardizedFileURL.path,
-            String(values?.fileSize ?? 0),
-            String(values?.contentModificationDate?.timeIntervalSince1970 ?? 0),
+            String(fileSize),
+            String(modificationDate?.timeIntervalSince1970 ?? 0),
             kind,
             variant
         ].joined(separator: "|")
@@ -220,7 +356,11 @@ struct MediaWorkspace {
     /// this call created the file. The ownership bit lets the optional
     /// pre-import trim flow remove a cancelled candidate without touching a
     /// deduplicated source already used by another project.
-    func importSourceCopyResult(from sourceURL: URL) throws -> ImportedSourceCopy {
+    func importSourceCopyResult(
+        from sourceURL: URL,
+        progress: MediaImportProgressHandler? = nil
+    ) throws -> ImportedSourceCopy {
+        progress?(0)
         try prepareBaseDirectories()
 
         let sourceFingerprint = try quickFileFingerprint(sourceURL)
@@ -230,12 +370,17 @@ struct MediaWorkspace {
         )
         for existingURL in existingImports {
             guard existingURL.pathExtension != "json",
+                  existingURL.pathExtension != "partial",
                   (try? existingURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
                 continue
             }
             guard (try? quickFileFingerprint(existingURL)) == sourceFingerprint else { continue }
+            progress?(1)
             return ImportedSourceCopy(url: existingURL, wasCreated: false)
         }
+
+        let sourceBytes = fileSize(at: sourceURL)
+        try validateAvailableCapacity(additionalBytes: sourceBytes)
 
         let fileName = "\(Self.timestampString())-\(UUID().uuidString)-\(sourceURL.lastPathComponent)"
         let destinationURL = importsDirectory.appendingPathComponent(fileName)
@@ -244,7 +389,11 @@ struct MediaWorkspace {
             try fileManager.removeItem(at: destinationURL)
         }
 
-        try fileManager.copyItem(at: sourceURL, to: destinationURL)
+        try copyFileReportingProgress(
+            from: sourceURL,
+            to: destinationURL,
+            progress: progress
+        )
         return ImportedSourceCopy(url: destinationURL, wasCreated: true)
     }
 
@@ -332,10 +481,46 @@ struct MediaWorkspace {
         sizeOfDirectory(rootDirectory)
     }
 
+    func fileSize(at url: URL) -> Int64 {
+        let attributes = try? fileManager.attributesOfItem(atPath: url.path)
+        return max((attributes?[.size] as? NSNumber)?.int64Value ?? 0, 0)
+    }
+
+    /// Keep a reserve beyond the predicted output so AVFoundation and iOS can
+    /// still write metadata, thumbnails, and filesystem journals safely.
+    func validateAvailableCapacity(
+        additionalBytes: Int64,
+        reserveBytes: Int64 = 512 * 1024 * 1024
+    ) throws {
+        guard additionalBytes > 0 else { return }
+        try prepareBaseDirectories()
+
+        let required = additionalBytes.addingReportingOverflow(reserveBytes)
+        let requiredBytes = required.overflow ? Int64.max : required.partialValue
+        guard let available = availableCapacityBytes(), available < requiredBytes else { return }
+
+        // Derived waveforms and thumbnails are disposable. Reclaim them before
+        // refusing the operation, then measure the volume one more time.
+        cleanupDerivedMedia(olderThan: .distantFuture, maximumBytes: 0)
+        let refreshedAvailable = availableCapacityBytes() ?? available
+        guard refreshedAvailable < requiredBytes else { return }
+        throw MediaWorkspaceError.insufficientStorage(
+            requiredBytes: requiredBytes,
+            availableBytes: refreshedAvailable
+        )
+    }
+
     private func createDirectoryIfNeeded(_ directory: URL) throws {
         if !fileManager.fileExists(atPath: directory.path) {
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         }
+    }
+
+    private func availableCapacityBytes() -> Int64? {
+        let values = try? rootDirectory.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey
+        ])
+        return values?.volumeAvailableCapacityForImportantUsage
     }
 
     private func touchCacheFile(_ url: URL) {
@@ -369,6 +554,52 @@ struct MediaWorkspace {
         data.append(last)
         let digest = SHA256.hash(data: data)
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func copyFileReportingProgress(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        progress: MediaImportProgressHandler?
+    ) throws {
+        let attributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
+        let totalBytes = max((attributes[.size] as? NSNumber)?.int64Value ?? 0, 0)
+        let partialURL = destinationURL.appendingPathExtension("partial")
+
+        if fileManager.fileExists(atPath: partialURL.path) {
+            try fileManager.removeItem(at: partialURL)
+        }
+        guard fileManager.createFile(atPath: partialURL.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+
+        let sourceHandle = try FileHandle(forReadingFrom: sourceURL)
+        let destinationHandle = try FileHandle(forWritingTo: partialURL)
+        var copiedBytes: Int64 = 0
+
+        do {
+            while true {
+                try Task.checkCancellation()
+                guard let data = try sourceHandle.read(upToCount: 1_048_576), !data.isEmpty else {
+                    break
+                }
+                try destinationHandle.write(contentsOf: data)
+                copiedBytes += Int64(data.count)
+                if totalBytes > 0 {
+                    progress?(min(Double(copiedBytes) / Double(totalBytes), 1))
+                }
+            }
+
+            try sourceHandle.close()
+            try destinationHandle.synchronize()
+            try destinationHandle.close()
+            try fileManager.moveItem(at: partialURL, to: destinationURL)
+            progress?(1)
+        } catch {
+            try? sourceHandle.close()
+            try? destinationHandle.close()
+            try? fileManager.removeItem(at: partialURL)
+            throw error
+        }
     }
 
     private func excludeFromBackup(_ url: URL) throws {

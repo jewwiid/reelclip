@@ -7,6 +7,7 @@ struct ImportTrimRequest: Identifiable {
     let photoLibraryIdentifier: String?
     let sourceName: String
     let canDiscardSourceOnCancel: Bool
+    let durationSeconds: Double
 }
 
 /// First-step source preparation for a new project. The full source is never
@@ -21,8 +22,19 @@ struct ImportTrimSheet: View {
     @State private var duration: Double = 0
     @State private var startSeconds: Double = 0
     @State private var endSeconds: Double = 0
-    @State private var isLoading = true
     @State private var errorMessage: String?
+
+    init(
+        request: ImportTrimRequest,
+        onImport: @escaping (ClipRange?) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.request = request
+        self.onImport = onImport
+        self.onCancel = onCancel
+        _duration = State(initialValue: request.durationSeconds)
+        _endSeconds = State(initialValue: request.durationSeconds)
+    }
 
     var body: some View {
         NavigationStack {
@@ -38,10 +50,6 @@ struct ImportTrimSheet: View {
                             rangeSummary
                             rangeControls
                             actionButtons
-                        } else if isLoading {
-                            ProgressView("Preparing clip…")
-                                .tint(AppPalette.accent)
-                                .frame(maxWidth: .infinity, minHeight: 180)
                         } else {
                             errorState
                         }
@@ -149,7 +157,8 @@ struct ImportTrimSheet: View {
                 end: $endSeconds,
                 duration: duration,
                 minimumSelection: minimumSelection,
-                step: sliderStep
+                step: sliderStep,
+                onPreviewFrame: showPreviewFrame
             )
             .frame(height: 48)
         }
@@ -162,31 +171,47 @@ struct ImportTrimSheet: View {
     }
 
     private var actionButtons: some View {
-        VStack(spacing: 10) {
+        Group {
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: 10) {
+                    importActionButtonRow
+                }
+            } else {
+                importActionButtonRow
+            }
+        }
+    }
+
+    private var importActionButtonRow: some View {
+        HStack(spacing: 10) {
             Button {
                 onImport(nil)
             } label: {
-                Label("Use full clip", systemImage: "rectangle.badge.play")
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
+                importActionLabel("Use full clip", systemImage: "play.rectangle.fill")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(AppPalette.primaryText)
-            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .modifier(ImportActionButtonStyle(prominent: false))
+            .accessibilityHint("Creates the project using the entire source video.")
 
             Button {
                 onImport(ClipRange(startSeconds: startSeconds, endSeconds: endSeconds))
             } label: {
-                Label("Import selected section", systemImage: "scissors")
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
+                importActionLabel("Import selection", systemImage: "scissors")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(AppPalette.background)
-            .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .modifier(ImportActionButtonStyle(prominent: true))
+            .accessibilityLabel("Import selected section")
+            .accessibilityHint("Creates the project using only the selected in and out points.")
         }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func importActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.subheadline.weight(.bold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.76)
+            .frame(maxWidth: .infinity)
+            .frame(height: 56)
+            .contentShape(Rectangle())
     }
 
     private var errorState: some View {
@@ -209,24 +234,20 @@ struct ImportTrimSheet: View {
     private var sliderStep: Double { duration > 120 ? 0.1 : 0.01 }
 
     private func loadSource() async {
-        isLoading = true
         errorMessage = nil
-        do {
-            let asset = AVURLAsset(url: request.url)
-            let loadedDuration = try await asset.load(.duration)
-            let seconds = CMTimeGetSeconds(loadedDuration)
-            guard seconds.isFinite, seconds > 0 else {
-                throw NSError(domain: "ImportTrimSheet", code: 1, userInfo: [NSLocalizedDescriptionKey: "The video duration could not be read."])
-            }
-            duration = seconds
-            startSeconds = 0
-            endSeconds = seconds
-            player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
-            isLoading = false
-        } catch {
-            isLoading = false
-            errorMessage = error.localizedDescription
-        }
+        let asset = AVURLAsset(url: request.url)
+        player.replaceCurrentItem(with: AVPlayerItem(asset: asset))
+    }
+
+    private func showPreviewFrame(at seconds: Double) {
+        guard seconds.isFinite, seconds >= 0, player.currentItem != nil else { return }
+        player.pause()
+        player.currentItem?.cancelPendingSeeks()
+        player.seek(
+            to: CMTime(seconds: min(seconds, duration), preferredTimescale: 600),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+        )
     }
 
     fileprivate static func timeLabel(_ seconds: Double) -> String {
@@ -250,9 +271,12 @@ private struct ImportRangeSelector: View {
     let duration: Double
     let minimumSelection: Double
     let step: Double
+    let onPreviewFrame: (Double) -> Void
 
     @State private var activeHandle: Handle?
     @State private var dragStartValue: Double = 0
+
+    private let handleWidth: CGFloat = 14
 
     var body: some View {
         GeometryReader { proxy in
@@ -272,8 +296,7 @@ private struct ImportRangeSelector: View {
                     .frame(width: max(7, endX - startX), height: 7)
                     .offset(x: startX)
 
-                handle(at: startX, isActive: activeHandle == .start)
-                handle(at: endX, isActive: activeHandle == .end)
+                handleLayer(startX: startX, endX: endX)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -284,17 +307,81 @@ private struct ImportRangeSelector: View {
         .accessibilityValue("From \(ImportTrimSheet.timeLabel(start)) to \(ImportTrimSheet.timeLabel(end))")
     }
 
-    private func handle(at position: CGFloat, isActive: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 2, style: .continuous)
-            .fill(AppPalette.primaryText)
-            .frame(width: 5, height: isActive ? 34 : 28)
-            .shadow(color: AppPalette.background.opacity(0.45), radius: 2, y: 1)
-            .offset(x: position - 2.5)
-            .animation(.easeOut(duration: 0.12), value: isActive)
+    @ViewBuilder
+    private func handleLayer(startX: CGFloat, endX: CGFloat) -> some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 12) {
+                rawHandleLayer(startX: startX, endX: endX)
+            }
+        } else {
+            rawHandleLayer(startX: startX, endX: endX)
+        }
+    }
+
+    private func rawHandleLayer(startX: CGFloat, endX: CGFloat) -> some View {
+        ZStack(alignment: .leading) {
+            handle(
+                at: startX,
+                isStart: true,
+                isActive: activeHandle == .start
+            )
+            .zIndex(activeHandle == .start ? 2 : 1)
+
+            handle(
+                at: endX,
+                isStart: false,
+                isActive: activeHandle == .end
+            )
+            .zIndex(activeHandle == .end ? 2 : 1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    private func handle(at position: CGFloat, isStart: Bool, isActive: Bool) -> some View {
+        importHandleSurface(isActive: isActive)
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(AppPalette.accent, lineWidth: isActive ? 2 : 1.25)
+            }
+            .overlay {
+                HStack(spacing: 2) {
+                    ForEach(0..<2, id: \.self) { _ in
+                        Capsule()
+                            .fill(AppPalette.accent)
+                            .frame(width: 1.5, height: 14)
+                    }
+                }
+                .environment(\.layoutDirection, isStart ? .rightToLeft : .leftToRight)
+            }
+            .shadow(color: .black.opacity(isActive ? 0.34 : 0.24), radius: isActive ? 7 : 4, y: 2)
+            .offset(x: position - handleWidth / 2)
+            .scaleEffect(isActive ? 1.08 : 1)
+            .animation(.snappy(duration: 0.16), value: isActive)
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func importHandleSurface(isActive: Bool) -> some View {
+        let height: CGFloat = isActive ? 40 : 36
+        if #available(iOS 26.0, *) {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.clear)
+                .frame(width: handleWidth, height: height)
+                .glassEffect(
+                    .regular
+                        .tint(AppPalette.accent.opacity(isActive ? 0.24 : 0.12))
+                        .interactive(),
+                    in: .rect(cornerRadius: 7)
+                )
+        } else {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(.regularMaterial)
+                .frame(width: handleWidth, height: height)
+        }
     }
 
     private func dragGesture(trackWidth: CGFloat, startX: CGFloat, endX: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 4)
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard abs(value.translation.width) >= abs(value.translation.height) else { return }
 
@@ -307,10 +394,14 @@ private struct ImportRangeSelector: View {
                 switch activeHandle {
                 case .start:
                     let maximum = max(0, end - minimumSelection)
-                    start = min(max(snapped(dragStartValue + delta), 0), maximum)
+                    let updatedStart = min(max(snapped(dragStartValue + delta), 0), maximum)
+                    start = updatedStart
+                    onPreviewFrame(updatedStart)
                 case .end:
                     let minimum = min(duration, start + minimumSelection)
-                    end = max(min(snapped(dragStartValue + delta), duration), minimum)
+                    let updatedEnd = max(min(snapped(dragStartValue + delta), duration), minimum)
+                    end = updatedEnd
+                    onPreviewFrame(updatedEnd)
                 case nil:
                     break
                 }
@@ -334,5 +425,33 @@ private struct ImportRangeSelector: View {
 
     private func clamped(_ value: Double) -> Double {
         min(max(value, 0), 1)
+    }
+}
+
+private struct ImportActionButtonStyle: ViewModifier {
+    let prominent: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if prominent {
+                content
+                    .buttonStyle(.glassProminent)
+                    .tint(AppPalette.accent)
+                    .foregroundStyle(AppPalette.background)
+            } else {
+                content
+                    .buttonStyle(.glass)
+                    .foregroundStyle(AppPalette.background)
+            }
+        } else {
+            content
+                .buttonStyle(.plain)
+                .foregroundStyle(prominent ? AppPalette.background : AppPalette.primaryText)
+                .background(
+                    prominent ? AppPalette.accent : AppPalette.controlSurface,
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
+        }
     }
 }

@@ -213,12 +213,16 @@ struct ClipView: View {
             // can find the old item.
             clearClipLoop()
             stopPlannedClipLoop()
-            if let newURL {
-                previewPlayer.replaceCurrentItem(with: AVPlayerItem(url: newURL))
+            if let previewURL = viewModel.resolvedPlaybackURL(for: newURL) {
+                previewPlayer.replaceCurrentItem(with: AVPlayerItem(url: previewURL))
                 installPreviewTimeObserver()
             } else {
                 previewPlayer.replaceCurrentItem(with: nil)
             }
+        }
+        .onChange(of: viewModel.playbackURL) { _, newURL in
+            guard viewModel.sourceURL != nil, let newURL else { return }
+            replacePreviewMediaPreservingPosition(with: newURL)
         }
         // Scene / selection change — also drop the loop. The
         // user might have selected a different range, or
@@ -249,8 +253,9 @@ struct ClipView: View {
             }
         }
         .onAppear {
-            if previewPlayer.currentItem == nil, let sourceURL = viewModel.sourceURL {
-                previewPlayer.replaceCurrentItem(with: AVPlayerItem(url: sourceURL))
+            if previewPlayer.currentItem == nil,
+               let playbackURL = viewModel.resolvedPlaybackURL(for: viewModel.sourceURL) {
+                previewPlayer.replaceCurrentItem(with: AVPlayerItem(url: playbackURL))
             }
             installPreviewTimeObserver()
         }
@@ -935,10 +940,38 @@ struct ClipView: View {
             previewSizeLevelButton
                 .padding(12)
         }
+        .overlay(alignment: .topLeading) {
+            if viewModel.isGeneratingProxy || viewModel.isUsingProxy {
+                previewProxyStatus
+                    .padding(12)
+            }
+        }
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(AppPalette.hairline, lineWidth: 1)
         }
+    }
+
+    private var previewProxyStatus: some View {
+        HStack(spacing: 6) {
+            Image(systemName: viewModel.isGeneratingProxy
+                  ? "arrow.triangle.2.circlepath"
+                  : "checkmark.circle.fill")
+                .font(.caption.weight(.black))
+            Text(viewModel.isGeneratingProxy
+                 ? "Proxy \(Int((viewModel.proxyGenerationProgress * 100).rounded()))%"
+                 : "Proxy preview")
+                .font(.caption2.weight(.black))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.68), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(viewModel.isGeneratingProxy
+                            ? "Preparing proxy preview, \(Int((viewModel.proxyGenerationProgress * 100).rounded())) percent"
+                            : "Using proxy preview")
     }
 
     /// Bottom-left resize button. Cycles the video preview
@@ -1787,6 +1820,7 @@ struct ClipView: View {
             PhotosPicker(
                 selection: $sceneSourcePickerItem,
                 matching: .videos,
+                preferredItemEncoding: .current,
                 photoLibrary: .shared()
             ) {
                 Label("Pick from Photos", systemImage: "photo.on.rectangle")
@@ -2877,6 +2911,7 @@ struct ClipView: View {
     ) -> ProjectPlannedClipPreviewItem {
         let thumbnailID = projectPreviewThumbnailID(sceneID: sceneID, rangeIndex: exportIndex)
         let isSourceAvailable = sourceURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        let previewURL = viewModel.resolvedPlaybackURL(for: sourceURL)
         return ProjectPlannedClipPreviewItem(
             id: "\(sceneID.uuidString)-\(exportIndex)",
             sceneID: sceneID,
@@ -2884,7 +2919,7 @@ struct ClipView: View {
             clipIndex: exportIndex,
             range: range,
             thumbnailID: thumbnailID,
-            sourceURL: sourceURL,
+            sourceURL: previewURL,
             isSourceAvailable: isSourceAvailable
         )
     }
@@ -3185,7 +3220,7 @@ struct ClipView: View {
     // MARK: - Long-press clip preview (loops the [start, end] range muted)
 
     private func startPlannedClipLoop(at index: Int) {
-        guard let url = viewModel.sourceURL else { return }
+        guard let url = viewModel.resolvedPlaybackURL(for: viewModel.sourceURL) else { return }
         guard viewModel.plannedRanges.indices.contains(index) else { return }
         let range = viewModel.plannedRanges[index]
         if loopingClipIndex == index { return }
@@ -3266,7 +3301,7 @@ struct ClipView: View {
             stopPlannedClipLoop()
             return
         }
-        guard let url = viewModel.sourceURL else { return }
+        guard let url = viewModel.resolvedPlaybackURL(for: viewModel.sourceURL) else { return }
         startClipLoop(url: url, range: range) {
             loopingSavedClipID = loopID
         }
@@ -3696,7 +3731,7 @@ struct ClipView: View {
 
             SavedClipsPlaybackStrip(
                 ranges: ranges,
-                sourceURL: viewModel.sourceURL
+                sourceURL: viewModel.resolvedPlaybackURL(for: viewModel.sourceURL)
             )
         }
         .padding(12)
@@ -3862,6 +3897,36 @@ struct ClipView: View {
         // else: neither play nor pause — preserve current state. A
         // thumbnail or transcript-word tap jumps the playhead but lets
         // playback continue (or stay paused) as it was.
+    }
+
+    /// Switch from the source to its proxy without resetting the user's
+    /// playhead. Proxy and source share the same media timebase, so planned
+    /// ranges and loop bounds remain valid across the item replacement.
+    private func replacePreviewMediaPreservingPosition(with url: URL) {
+        if let currentURL = (previewPlayer.currentItem?.asset as? AVURLAsset)?.url,
+           currentURL.standardizedFileURL == url.standardizedFileURL {
+            return
+        }
+
+        let currentSeconds = previewPlayer.currentTime().seconds
+        let seekSeconds = currentSeconds.isFinite ? max(currentSeconds, 0) : viewModel.scrubPositionSeconds
+        let wasPlaying = isPreviewPlaying
+        let loopRange = activePlannedRangeForLoop()
+
+        clearClipLoop()
+        previewPlayer.replaceCurrentItem(with: AVPlayerItem(url: url))
+        let target = CMTime(seconds: seekSeconds, preferredTimescale: 600)
+        previewPlayer.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            Task { @MainActor in
+                if let loopRange,
+                   viewModel.plannedRanges.indices.contains(loopRange.index) {
+                    setupClipLoop(for: loopRange.range, at: loopRange.index)
+                }
+                if wasPlaying {
+                    previewPlayer.play()
+                }
+            }
+        }
     }
 
     private func installPreviewTimeObserver() {

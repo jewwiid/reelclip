@@ -350,12 +350,6 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Settings")
-                    .font(.system(size: 30, weight: .black, design: .rounded))
-                    .foregroundStyle(AppPalette.primaryText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-
                 Text("Manage AI providers, subscription status, and default cut settings.")
                     .font(.subheadline)
                     .foregroundStyle(AppPalette.secondaryText)

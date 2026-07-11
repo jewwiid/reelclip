@@ -54,6 +54,57 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: copiedURL), data)
     }
 
+    func testPickedVideoMaterializesBeforePhotosTemporaryFileDisappears() throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let receivedURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("photos-transfer-\(UUID().uuidString).mov")
+        let data = Data("photos-video-placeholder".utf8)
+        try data.write(to: receivedURL)
+
+        let picked = try PickedVideo.materialize(
+            receivedFile: receivedURL,
+            workspace: workspace
+        )
+        try FileManager.default.removeItem(at: receivedURL)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: picked.url.path))
+        XCTAssertEqual(try Data(contentsOf: picked.url), data)
+        XCTAssertTrue(picked.isWorkspaceCopyNew)
+    }
+
+    func testPickedVideoReportsPhotosDownloadFailureForMissingTransfer() throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-photos-transfer-\(UUID().uuidString).mov")
+
+        XCTAssertThrowsError(
+            try PickedVideo.materialize(receivedFile: missingURL, workspace: workspace)
+        ) { error in
+            XCTAssertEqual(
+                error.localizedDescription,
+                PickedVideoImportError.photosDownloadUnavailable.localizedDescription
+            )
+        }
+    }
+
+    func testMediaWorkspaceReportsRealCopyProgress() throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-progress-source-\(UUID().uuidString).mov")
+        try Data(repeating: 7, count: 3 * 1_048_576).write(to: sourceURL)
+        let recorder = ImportProgressRecorder()
+
+        _ = try workspace.importSourceCopyResult(from: sourceURL) { fraction in
+            recorder.append(fraction)
+        }
+
+        let values = recorder.values
+        XCTAssertGreaterThan(values.count, 3)
+        XCTAssertEqual(values.first, 0)
+        XCTAssertEqual(values.last, 1)
+        XCTAssertTrue(zip(values, values.dropFirst()).allSatisfy { $0 <= $1 })
+    }
+
     func testMediaWorkspaceMarksDeduplicatedImportAsShared() throws {
         let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
         let sourceURL = FileManager.default.temporaryDirectory
@@ -66,6 +117,35 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertTrue(created.wasCreated)
         XCTAssertFalse(shared.wasCreated)
         XCTAssertEqual(created.url, shared.url)
+    }
+
+    func testMediaWorkspaceFindsCachedProxyForUnchangedSource() throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let sourceURL = workspace.importsDirectory
+            .appendingPathComponent("proxy-source.mov")
+        try workspace.prepareBaseDirectories()
+        try Data("original-media".utf8).write(to: sourceURL)
+
+        let proxyURL = try workspace.proxyURL(for: sourceURL)
+        try Data("proxy-media".utf8).write(to: proxyURL)
+
+        XCTAssertEqual(workspace.cachedProxyURL(for: sourceURL), proxyURL)
+    }
+
+    func testMediaWorkspaceInvalidatesProxyWhenSourceChanges() throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let sourceURL = workspace.importsDirectory
+            .appendingPathComponent("changing-proxy-source.mov")
+        try workspace.prepareBaseDirectories()
+        try Data("first-source".utf8).write(to: sourceURL)
+
+        let firstProxyURL = try workspace.proxyURL(for: sourceURL)
+        try Data("proxy-media".utf8).write(to: firstProxyURL)
+        try Data("second-source-with-a-different-size".utf8).write(to: sourceURL)
+
+        let secondProxyURL = try workspace.proxyURL(for: sourceURL)
+        XCTAssertNotEqual(firstProxyURL, secondProxyURL)
+        XCTAssertNil(workspace.cachedProxyURL(for: sourceURL))
     }
 
     func testMediaWorkspaceRemovesOnlyDirectImportCandidate() throws {
@@ -346,6 +426,15 @@ final class VideoSegmenterTests: XCTestCase {
 
         XCTAssertFalse(thumbnails.isEmpty)
         XCTAssertTrue(thumbnails.allSatisfy { $0.image.size.width > 0 && $0.image.size.height > 0 })
+    }
+
+    func testProxyGeneratorSkipsSmallLowResolutionVideo() async throws {
+        let sourceURL = try await makeTestVideo(duration: 1.0, frameRate: 10)
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let generator = MediaProxyGenerator(workspace: workspace)
+        let shouldGenerate = try await generator.shouldGenerateProxy(for: sourceURL)
+
+        XCTAssertFalse(shouldGenerate)
     }
 
     func testPreviewGeneratorAspectRatioHonorsPreferredTransform() {
@@ -900,5 +989,20 @@ final class VideoSegmenterTests: XCTestCase {
         #if targetEnvironment(simulator)
         throw XCTSkip("AVAssetExportSession video encoding is unstable in the iOS simulator. Run this export test on a device.")
         #endif
+    }
+}
+
+private final class ImportProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [Double] = []
+
+    var values: [Double] {
+        lock.withLock { storage }
+    }
+
+    func append(_ value: Double) {
+        lock.withLock {
+            storage.append(value)
+        }
     }
 }

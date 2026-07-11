@@ -19,13 +19,43 @@ struct PickedVideo: Transferable {
         FileRepresentation(contentType: .movie) { video in
             SentTransferredFile(video.url)
         } importing: { received in
-            let imported = try MediaWorkspace().importSourceCopyResult(from: received.file)
+            // `received.file` is owned by PhotosUI and can disappear as soon
+            // as this closure returns. Materialize it here, not from the outer
+            // `loadTransferable` completion handler.
+            try materialize(receivedFile: received.file)
+        }
+    }
+
+    static func materialize(
+        receivedFile: URL,
+        workspace: MediaWorkspace = MediaWorkspace()
+    ) throws -> PickedVideo {
+        guard workspace.fileManager.fileExists(atPath: receivedFile.path) else {
+            throw PickedVideoImportError.photosDownloadUnavailable
+        }
+
+        do {
+            let imported = try workspace.importSourceCopyResult(from: receivedFile)
             return PickedVideo(
                 url: imported.url,
-                sourceName: received.file.lastPathComponent,
+                sourceName: receivedFile.lastPathComponent,
                 isWorkspaceCopyNew: imported.wasCreated,
                 photoLibraryLocalIdentifier: nil
             )
+        } catch let error as CocoaError where error.code == .fileNoSuchFile
+            || error.code == .fileReadNoSuchFile {
+            throw PickedVideoImportError.photosDownloadUnavailable
+        }
+    }
+}
+
+enum PickedVideoImportError: LocalizedError {
+    case photosDownloadUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .photosDownloadUnavailable:
+            return "Photos could not finish downloading this video. Keep ReelClip open, check your connection and free storage, then try again."
         }
     }
 }

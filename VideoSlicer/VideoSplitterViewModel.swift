@@ -62,7 +62,16 @@ struct SkippedSceneExport: Identifiable, Equatable, Hashable {
 final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink {
     @Published var selectedItem: PhotosPickerItem?
     @Published private(set) var isImportingMedia = false
-    @Published var sourceURL: URL?
+    @Published var sourceURL: URL? {
+        didSet {
+            if sourceURL == nil, oldValue != nil {
+                resetPlaybackMedia()
+            }
+        }
+    }
+    @Published private(set) var playbackURL: URL?
+    @Published private(set) var isGeneratingProxy = false
+    @Published private(set) var proxyGenerationProgress = 0.0
     @Published var durationSeconds: Double?
     @Published var cutMode: CutMode = .highlight {
         willSet { invalidateShuffle() }
@@ -980,6 +989,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     private let previewGenerator = MediaPreviewGenerator()
     private let waveformAnalyzer = WaveformAnalyzer()
     private let mediaWorkspace: MediaWorkspace
+    private let proxyGenerator: MediaProxyGenerator
     private let projectStore: MediaProjectStore
     private let exportNotifications: ExportNotificationScheduling
     private let exportBackgroundTasks: ExportBackgroundTaskManaging
@@ -989,6 +999,13 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     private var previewTask: Task<Void, Never>?
     private var waveformTask: Task<Void, Never>?
     private var scrubPersistenceTask: Task<Void, Never>?
+    private var proxyTask: Task<Void, Never>?
+    private var proxyGenerationID: UUID?
+    private var playbackOriginalURL: URL?
+
+    var importWorkspaceRoot: URL {
+        mediaWorkspace.rootDirectory
+    }
 
     init(
         mediaWorkspace: MediaWorkspace = MediaWorkspace(),
@@ -996,6 +1013,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         exportBackgroundTasks: ExportBackgroundTaskManaging? = nil
     ) {
         self.mediaWorkspace = mediaWorkspace
+        self.proxyGenerator = MediaProxyGenerator(workspace: mediaWorkspace)
         self.projectStore = MediaProjectStore(workspace: mediaWorkspace)
         self.exportNotifications = exportNotifications
         self.exportBackgroundTasks = exportBackgroundTasks ?? ExportBackgroundTaskManager.shared
@@ -1014,6 +1032,23 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         loadProjects()
         cleanupExpiredExports()
         refreshAIUsagePeriod()
+    }
+
+    var isUsingProxy: Bool {
+        guard let sourceURL, let playbackURL else { return false }
+        return playbackOriginalURL?.standardizedFileURL == sourceURL.standardizedFileURL
+            && sourceURL.standardizedFileURL != playbackURL.standardizedFileURL
+    }
+
+    /// Resolves preview media only. Planning, analysis, and export continue to
+    /// use the original scene URL stored in `sourceURL` / `MediaProjectScene`.
+    func resolvedPlaybackURL(for originalURL: URL?) -> URL? {
+        guard let originalURL else { return nil }
+        if sourceMatches(originalURL),
+           playbackOriginalURL?.standardizedFileURL == originalURL.standardizedFileURL {
+            return playbackURL ?? originalURL
+        }
+        return mediaWorkspace.cachedProxyURL(for: originalURL) ?? originalURL
     }
 
     /// Sync the active subscription tier. The store calls this whenever its
@@ -1261,6 +1296,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // scene so the editor immediately shows the empty
         // source stage + a clean cut recipe. The user can then
         // import a clip via the existing Files / Photos buttons.
+        resetPlaybackMedia()
         sourceURL = nil
         durationSeconds = nil
         sourcePhotoLibraryIdentifier = nil
@@ -1319,6 +1355,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         let preservedName = scene.name
         let preservedCreatedAt = scene.createdAt
 
+        resetPlaybackMedia()
         sourceURL = nil
         durationSeconds = nil
         sourcePhotoLibraryIdentifier = nil
@@ -1805,14 +1842,20 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// Copies a new-project file import into the private workspace so it can
     /// remain available while the user chooses full-clip or pre-import trim.
     /// The original security-scoped file is never modified.
-    func prepareImportCopy(from url: URL) async throws -> ImportedSourceCopy {
+    func prepareImportCopy(
+        from url: URL,
+        progress: MediaImportProgressHandler? = nil
+    ) async throws -> ImportedSourceCopy {
         // A large Files copy must not run on the main actor while the source
         // chooser is visible. Recreate the workspace from its stable root so
         // the detached task only captures Sendable values.
         let workspaceRoot = mediaWorkspace.rootDirectory
         return try await Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
-            let copiedURL = try MediaWorkspace(rootDirectory: workspaceRoot).importSourceCopyResult(from: url)
+            let copiedURL = try MediaWorkspace(rootDirectory: workspaceRoot).importSourceCopyResult(
+                from: url,
+                progress: progress
+            )
             try Task.checkCancellation()
             return copiedURL
         }.value
@@ -1912,6 +1955,16 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
         let photoId = item.photoLibraryLocalIdentifier
 
+        var materializedVideo: PickedVideo?
+        var sourceInstalled = false
+        defer {
+            if let materializedVideo,
+               materializedVideo.isWorkspaceCopyNew,
+               !sourceInstalled {
+                mediaWorkspace.removeImportedSource(at: materializedVideo.url)
+            }
+        }
+
         do {
             guard let video = try await item.loadTransferable(type: PickedVideo.self) else {
                 statusMessage = "Choose a valid video file."
@@ -1924,13 +1977,17 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 processingPhase = .idle
                 return
             }
+            materializedVideo = video
 
-            let copiedURL = try mediaWorkspace.importSourceCopy(from: video.url)
+            guard FileManager.default.fileExists(atPath: video.url.path) else {
+                throw PickedVideoImportError.photosDownloadUnavailable
+            }
             try await installSourceForActiveScene(
-                url: copiedURL,
+                url: video.url,
                 photoLibraryIdentifier: photoId ?? video.photoLibraryLocalIdentifier,
                 planAction: planAction
             )
+            sourceInstalled = true
             statusMessage = "Scene source updated."
         } catch is CancellationError {
             statusMessage = "Scene source import cancelled."
@@ -1966,6 +2023,14 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 statusMessage = "Scene source import cancelled."
                 processingPhase = .idle
                 return
+            }
+
+            // iCloud Drive placeholders: force the download before the
+            // workspace copy step tries to read the file.
+            try await MediaImportPreparation.ensureFileIsLocal(url) { [weak self] fraction in
+                Task { @MainActor in
+                    self?.progress = fraction
+                }
             }
 
             let copiedURL = try mediaWorkspace.importSourceCopy(from: url)
@@ -2021,6 +2086,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
 
         sourceURL = url
+        preparePlaybackMedia(for: url)
         durationSeconds = duration
         sourceAspectRatio = aspect
         frameDurationSeconds = frameDur
@@ -3608,6 +3674,18 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             }
         }
 
+        do {
+            let estimatedBytes = estimatedExportBytes(
+                for: flatExportPlan,
+                appendsOutro: VideoSegmenter.shouldAppendOutro(forTier: tierSnapshot)
+            )
+            try mediaWorkspace.validateAvailableCapacity(additionalBytes: estimatedBytes)
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            statusMessage = "Not enough free space to render this export."
+            return
+        }
+
         processingTask?.cancel()
         // Creator priority: schedule the entire render-and-save flow at
         // the tier-appropriate QoS (`.userInitiated` for Creator,
@@ -3830,6 +3908,37 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
         let fallback = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         return fallback.isEmpty ? "Could not render this scene" : fallback
+    }
+
+    private func estimatedExportBytes(
+        for plan: [FlatExportClip],
+        appendsOutro: Bool
+    ) -> Int64 {
+        let estimated = plan.reduce(0.0) { total, entry in
+            guard let sourceURL = entry.sourceURL,
+                  FileManager.default.fileExists(atPath: sourceURL.path) else {
+                return total
+            }
+            let sourceDuration = entry.scene.durationSeconds
+                ?? (sourceURL.standardizedFileURL == self.sourceURL?.standardizedFileURL
+                    ? durationSeconds
+                    : nil)
+                ?? 0
+            guard sourceDuration > 0 else { return total }
+
+            let sourceBytes = Double(mediaWorkspace.fileSize(at: sourceURL))
+            let clipDuration = max(entry.range.endSeconds - entry.range.startSeconds, 0)
+            let outroDuration = appendsOutro ? CMTimeGetSeconds(OutroRenderer.duration) : 0
+            return total + sourceBytes * ((clipDuration + outroDuration) / sourceDuration)
+        }
+
+        // Export settings and container overhead can exceed the source-bitrate
+        // estimate. MediaWorkspace adds a separate 512 MB system reserve.
+        let withHeadroom = (estimated * 1.25).rounded(.up)
+        guard withHeadroom.isFinite, withHeadroom < Double(Int64.max) else {
+            return Int64.max
+        }
+        return Int64(withHeadroom)
     }
 
     /// Step 2 of the save flow: commit the rendered clips to the photo library.
@@ -4194,12 +4303,23 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // export files so the recipient can resolve the source video.
         let photoId = item.photoLibraryLocalIdentifier
 
+        var materializedVideo: PickedVideo?
+        var sourceInstalled = false
+        defer {
+            if let materializedVideo,
+               materializedVideo.isWorkspaceCopyNew,
+               !sourceInstalled {
+                mediaWorkspace.removeImportedSource(at: materializedVideo.url)
+            }
+        }
+
         do {
             guard let video = try await item.loadTransferable(type: PickedVideo.self) else {
                 statusMessage = "Choose a valid video file."
                 processingPhase = .idle
                 return
             }
+            materializedVideo = video
 
             guard !Task.isCancelled else {
                 statusMessage = "Video import cancelled."
@@ -4207,12 +4327,10 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 return
             }
 
-            // PhotosPicker hands us a temp file URL the system may purge at any time.
-            // Copy into the persistent workspace so the project's sourcePath stays
-            // valid across launches — otherwise thumbnails + waveform + preview all
-            // break the next time the temp file is reaped.
-            let copiedURL = try mediaWorkspace.importSourceCopy(from: video.url)
-            try await setLoadedVideo(url: copiedURL)
+            guard FileManager.default.fileExists(atPath: video.url.path) else {
+                throw PickedVideoImportError.photosDownloadUnavailable
+            }
+            try await setLoadedVideo(url: video.url)
             // Persist the PHAsset identifier so it's available when
             // the project is exported to a `.reelclip` file. Prefer
             // the identifier from the PhotosPickerItem (most reliable);
@@ -4220,6 +4338,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             // transferable import, currently always nil).
             sourcePhotoLibraryIdentifier = photoId ?? video.photoLibraryLocalIdentifier
             persistCurrentProject()
+            sourceInstalled = true
             isProjectBrowserVisible = false
             statusMessage = "Ready to analyze cuts."
         } catch is CancellationError {
@@ -4332,6 +4451,18 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 }
                 try MediaProcessingLimits.validateSourceDuration(end - start, for: currentTier)
 
+                // The trim renderer writes a temporary output and then copies
+                // that result into Imports before deleting the original
+                // candidate. Budget for both files at their estimated source
+                // bitrate so large trims fail before AVFoundation starts.
+                let sourceBytes = mediaWorkspace.fileSize(at: url)
+                let selectedRatio = min(max((end - start) / sourceDuration, 0), 1)
+                let estimatedTrimBytes = Int64((Double(sourceBytes) * selectedRatio).rounded(.up))
+                let trimCapacity = estimatedTrimBytes.multipliedReportingOverflow(by: 2)
+                try mediaWorkspace.validateAvailableCapacity(
+                    additionalBytes: trimCapacity.overflow ? Int64.max : trimCapacity.partialValue
+                )
+
                 let rendered = try await segmenter.renderSourceTrim(
                     sourceURL: url,
                     range: ClipRange(startSeconds: start, endSeconds: end),
@@ -4393,6 +4524,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     private func resetLoadedMediaState(keepSource: Bool) {
         if !keepSource {
+            resetPlaybackMedia()
             sourceURL = nil
             durationSeconds = nil
             sourcePhotoLibraryIdentifier = nil
@@ -4414,6 +4546,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     private func setLoadedVideo(url: URL, suggestedProjectTitle: String? = nil) async throws {
         sourceURL = url
+        preparePlaybackMedia(for: url)
         // Seed the editable title with the source filename fallback the first
         // time a video is imported. The user can rename it inline; an empty
         // title is coerced to this same fallback at persist time.
@@ -4435,6 +4568,82 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         persistCurrentProject()
         // New projects don't have a cached transcript — kick off STT now.
         startTranscriptionIfNeeded(for: url, persistWhenReady: true)
+    }
+
+    private func sourceMatches(_ url: URL) -> Bool {
+        sourceURL?.standardizedFileURL == url.standardizedFileURL
+    }
+
+    private func resetPlaybackMedia() {
+        proxyTask?.cancel()
+        proxyTask = nil
+        proxyGenerationID = nil
+        playbackURL = nil
+        playbackOriginalURL = nil
+        isGeneratingProxy = false
+        proxyGenerationProgress = 0
+    }
+
+    private func preparePlaybackMedia(for originalURL: URL) {
+        proxyTask?.cancel()
+        let generationID = UUID()
+        proxyGenerationID = generationID
+        playbackOriginalURL = originalURL
+        playbackURL = originalURL
+        isGeneratingProxy = false
+        proxyGenerationProgress = 0
+
+        if let cachedURL = mediaWorkspace.cachedProxyURL(for: originalURL) {
+            playbackURL = cachedURL
+            proxyGenerationProgress = 1
+            proxyTask = nil
+            return
+        }
+
+        proxyTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.proxyGenerationID == generationID {
+                    self.proxyTask = nil
+                }
+            }
+
+            do {
+                let shouldGenerate = try await self.proxyGenerator.shouldGenerateProxy(for: originalURL)
+                try Task.checkCancellation()
+                guard self.proxyGenerationID == generationID,
+                      self.sourceMatches(originalURL) else { return }
+                guard shouldGenerate else { return }
+
+                self.isGeneratingProxy = true
+                let proxyURL = try await self.proxyGenerator.generateProxy(for: originalURL) { [weak self] value in
+                    guard let self,
+                          self.proxyGenerationID == generationID,
+                          self.sourceMatches(originalURL) else { return }
+                    self.proxyGenerationProgress = min(max(value, 0), 1)
+                }
+                try Task.checkCancellation()
+                guard self.proxyGenerationID == generationID,
+                      self.sourceMatches(originalURL) else { return }
+
+                self.playbackURL = proxyURL
+                self.isGeneratingProxy = false
+                self.proxyGenerationProgress = 1
+            } catch is CancellationError {
+                guard self.proxyGenerationID == generationID else { return }
+                self.isGeneratingProxy = false
+                self.proxyGenerationProgress = 0
+            } catch {
+                // A proxy is an optimization. Falling back to the original
+                // preserves editing instead of turning an encoder failure into
+                // a blocking import error.
+                guard self.proxyGenerationID == generationID,
+                      self.sourceMatches(originalURL) else { return }
+                self.playbackURL = originalURL
+                self.isGeneratingProxy = false
+                self.proxyGenerationProgress = 0
+            }
+        }
     }
 
     /// Run on-device speech-to-text on the given source. If a transcript is
@@ -4550,6 +4759,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         if !activeSceneIsBlank {
             loadPreviews(for: project.sourceURL, durationSeconds: project.durationSeconds)
             loadWaveform(for: project.sourceURL, durationSeconds: project.durationSeconds)
+            if let sourceURL {
+                preparePlaybackMedia(for: sourceURL)
+            }
         }
 
         statusMessage = activeSceneIsBlank
@@ -4739,6 +4951,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // photo identifier) — nothing to do. Previews stay valid.
         if sceneSourcePath == currentSourcePath,
            scene.sourcePhotoLibraryIdentifier == sourcePhotoLibraryIdentifier {
+            if let sourceURL, playbackURL == nil {
+                preparePlaybackMedia(for: sourceURL)
+            }
             return
         }
 
@@ -4795,6 +5010,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         waveformSamples = []
 
         sourceURL = url
+        preparePlaybackMedia(for: url)
         sourcePhotoLibraryIdentifier = photoLibraryIdentifier
 
         do {
