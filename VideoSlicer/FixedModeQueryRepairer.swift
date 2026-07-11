@@ -55,8 +55,11 @@ struct FixedModeQueryRepairer {
             """
         )
 
+        // A recipe is expected to be short. Bound pasted text so an
+        // accidental long paste cannot exhaust the on-device context.
+        let boundedRaw = String(raw.prefix(1_000))
         let prompt = """
-        Rewrite this clip recipe: "\(raw)"
+        Rewrite this clip recipe: "\(boundedRaw)"
         """
 
         let response = try await session.respond(to: prompt, generating: RepairedClipRecipe.self)

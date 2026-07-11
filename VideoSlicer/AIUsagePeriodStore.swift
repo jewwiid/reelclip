@@ -11,9 +11,14 @@ enum AIUsagePeriodStore {
     private static let periodStartKey = "rc.aiPlanUsage.periodStart"
     private static let defaults: UserDefaults = .standard
 
-    static func startOfCurrentMonth(referenceDate: Date = Date()) -> Date {
+    private static var utcCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+        return calendar
+    }
+
+    static func startOfCurrentMonth(referenceDate: Date = Date()) -> Date {
+        let calendar = utcCalendar
         let components = calendar.dateComponents(
             [.year, .month],
             from: referenceDate
@@ -23,7 +28,7 @@ enum AIUsagePeriodStore {
 
     static func read() -> (count: Int, periodStart: Date) {
         let storedStart = defaults.object(forKey: periodStartKey) as? Date ?? .distantPast
-        let sameMonth = Calendar.current.compare(
+        let sameMonth = utcCalendar.compare(
             storedStart,
             to: startOfCurrentMonth(),
             toGranularity: .month

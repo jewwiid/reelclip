@@ -223,26 +223,35 @@ enum ClipQueryParser {
 
         let lower = raw.lowercased()
 
-        let intervals = extractIntervals(in: lower)
-        let durations = extractDurations(in: lower, excluding: intervals)
-        let count = extractCount(in: lower)
+        let intervalMatches = extractIntervals(in: lower)
+        let durationMatches = extractDurations(in: lower, excluding: intervalMatches.map(\.range))
+        let count = extractCount(in: lower, excluding: (intervalMatches + durationMatches).map(\.range))
 
-        guard !durations.isEmpty else { return nil }
+        guard !durationMatches.isEmpty else { return nil }
 
         return ClipQuery(
             count: count,
-            durationSeconds: durations.first,
-            intervalSeconds: intervals.first
+            durationSeconds: durationMatches.first?.seconds,
+            intervalSeconds: intervalMatches.first?.seconds
         )
     }
 
     // MARK: - Internal
 
+    private struct NumberUnitMatch {
+        let seconds: Double
+        let range: Range<String.Index>
+    }
+
+    private static let numberTokenPattern = #"\d+(?:\.\d+)?|[a-z]+(?:-[a-z]+)?"#
+    private static let unitPattern = #"seconds?|secs?|s|minutes?|mins?|m|min"#
+
     /// Finds "<number or word-number> <unit>" tokens, returns them as seconds.
-    private static func numberUnitMatches(in text: String) -> [(Double, Range<String.Index>)] {
-        var results: [(Double, Range<String.Index>)] = []
-        // Accept both digit ("5") and word ("five", "ten", "twenty") numerals.
-        let pattern = #"(\d+(?:\.\d+)?|\w+)\s*(seconds?|s|minutes?|m|min)\b"#
+    private static func numberUnitMatches(in text: String) -> [NumberUnitMatch] {
+        var results: [NumberUnitMatch] = []
+        // Accept digit ("5"), word ("five"), and hyphenated duration-adjective
+        // forms ("five-second", "twenty-five-second").
+        let pattern = "(\(numberTokenPattern))\\s*-?\\s*(\(unitPattern))\\b"
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return results }
 
         let range = NSRange(text.startIndex..., in: text)
@@ -255,7 +264,7 @@ enum ClipQueryParser {
             guard let number = parseNumber(numberToken) else { return }
             let seconds = toSeconds(number, unit: unit)
             if let fullRange = Range(match.range, in: text) {
-                results.append((seconds, fullRange))
+                results.append(NumberUnitMatch(seconds: seconds, range: fullRange))
             }
         }
         return results
@@ -265,54 +274,92 @@ enum ClipQueryParser {
     /// accepted as a forgiving fallback for the common "every" typo.
     private static let intervalCueWords = ["every", "per", "apart", "spaced", "very"]
 
-    private static func extractIntervals(in text: String) -> [Double] {
+    private static func extractIntervals(in text: String) -> [NumberUnitMatch] {
         // Build a single regex matching any of the cue words.
         let cues = intervalCueWords.joined(separator: "|")
-        let pattern = "(?:\(cues))\\s+(\\d+(?:\\.\\d+)?|\\w+)\\s*(seconds?|s|minutes?|m|min)\\b"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let beforePattern = "(?:\(cues))\\s+(\(numberTokenPattern))\\s*-?\\s*(\(unitPattern))\\b"
+        let afterPattern = "(\(numberTokenPattern))\\s*-?\\s*(\(unitPattern))\\s+(?:apart|gap|gaps|spacing|space|spaces)\\b"
+        guard let beforeRegex = try? NSRegularExpression(pattern: beforePattern),
+              let afterRegex = try? NSRegularExpression(pattern: afterPattern) else { return [] }
         let range = NSRange(text.startIndex..., in: text)
-        guard let match = regex.firstMatch(in: text, range: range),
-              let nRange = Range(match.range(at: 1), in: text),
-              let uRange = Range(match.range(at: 2), in: text) else { return [] }
-        let number = parseNumber(String(text[nRange])) ?? 0
-        let unit = String(text[uRange])
-        return [toSeconds(number, unit: unit)]
+        if let match = beforeRegex.firstMatch(in: text, range: range),
+           let nRange = Range(match.range(at: 1), in: text),
+           let uRange = Range(match.range(at: 2), in: text),
+           let fullRange = Range(match.range, in: text),
+           let number = parseNumber(String(text[nRange])) {
+            return [NumberUnitMatch(seconds: toSeconds(number, unit: String(text[uRange])), range: fullRange)]
+        }
+        if let match = afterRegex.firstMatch(in: text, range: range),
+           let nRange = Range(match.range(at: 1), in: text),
+           let uRange = Range(match.range(at: 2), in: text),
+           let fullRange = Range(match.range, in: text),
+           let number = parseNumber(String(text[nRange])) {
+            return [NumberUnitMatch(seconds: toSeconds(number, unit: String(text[uRange])), range: fullRange)]
+        }
+        return []
     }
 
-    private static func extractDurations(in text: String, excluding intervals: [Double]) -> [Double] {
+    private static func extractDurations(in text: String, excluding excludedRanges: [Range<String.Index>]) -> [NumberUnitMatch] {
         let all = numberUnitMatches(in: text)
-        let intervalSet = Set(intervals)
-        // Drop matches whose value appears in the interval list (avoids double-counting
-        // "5 second clips every 5 seconds" as both duration and interval).
         var seen: Set<Double> = []
-        var results: [Double] = []
-        for value in all.map({ $0.0 }) where !intervalSet.contains(value) && !seen.contains(value) {
-            seen.insert(value)
-            results.append(value)
+        var results: [NumberUnitMatch] = []
+        for match in all
+        where !excludedRanges.contains(where: { rangesOverlap(match.range, $0) })
+            && !seen.contains(match.seconds) {
+            seen.insert(match.seconds)
+            results.append(match)
         }
         return results
     }
 
-    private static func extractCount(in text: String) -> Int? {
-        // Match "N clip(s)" or "N cut(s)". "Cut" is the common verb form.
-        let pattern = #"(\d+|\w+)\s+(clips?|cuts?)\b"#
+    private static func extractCount(in text: String, excluding excludedRanges: [Range<String.Index>]) -> Int? {
+        // Match "N clip(s)", "N five-second clip(s)", or "make N".
+        // Skip candidate number tokens that are part of a duration match so
+        // "five-second clips" is not misread as "5 clips".
+        let clipPattern = "(\(numberTokenPattern))\\s+(?:(?:\(numberTokenPattern))\\s*-?\\s*(?:\(unitPattern))\\s+)?(?:clips?|cuts?)\\b"
+        let commandPattern = "(?:make|create|cut|export|save)\\s+(\(numberTokenPattern))\\b"
+        return firstParsedCount(in: text, pattern: clipPattern, excluding: excludedRanges)
+            ?? firstParsedCount(in: text, pattern: commandPattern, excluding: excludedRanges)
+    }
+
+    private static func firstParsedCount(
+        in text: String,
+        pattern: String,
+        excluding excludedRanges: [Range<String.Index>]
+    ) -> Int? {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range = NSRange(text.startIndex..., in: text)
-        guard let match = regex.firstMatch(in: text, range: range),
-              let nRange = Range(match.range(at: 1), in: text) else { return nil }
-        let token = String(text[nRange])
-        return parseNumber(token).map { Int($0) }
+        var result: Int?
+        regex.enumerateMatches(in: text, range: range) { match, _, stop in
+            guard result == nil,
+                  let match,
+                  let nRange = Range(match.range(at: 1), in: text),
+                  !excludedRanges.contains(where: { rangesOverlap(nRange, $0) }),
+                  let parsed = parseNumber(String(text[nRange])) else { return }
+            result = Int(parsed)
+            stop.pointee = true
+        }
+        return result
     }
 
     private static func parseNumber(_ token: String) -> Double? {
         if let n = Double(token) { return n }
         if let n = wordToInt[token] { return Double(n) }
-        // Hyphenated compounds like "twenty-five" → take the first word.
-        if let firstWord = token.split(separator: "-").first,
-           let n = wordToInt[String(firstWord)] {
-            return Double(n)
+        // Hyphenated compounds like "twenty-five" → sum the parts.
+        let parts = token.split(separator: "-").map(String.init)
+        if parts.count > 1 {
+            var total = 0
+            for part in parts {
+                guard let value = wordToInt[part] else { return nil }
+                total += value
+            }
+            return Double(total)
         }
         return nil
+    }
+
+    private static func rangesOverlap(_ lhs: Range<String.Index>, _ rhs: Range<String.Index>) -> Bool {
+        lhs.lowerBound < rhs.upperBound && rhs.lowerBound < lhs.upperBound
     }
 
     private static func toSeconds(_ number: Double, unit: String) -> Double {

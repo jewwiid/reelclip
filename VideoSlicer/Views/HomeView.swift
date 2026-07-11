@@ -11,14 +11,32 @@ struct HomeView: View {
     @State private var isReelClipExporterPresented = false
     @State private var reelClipExportURL: URL?
     @State private var showPaywall: Bool = false
+    // Drives the "where should we import from?" chooser shown when
+    // the user taps an empty state that needs a source video
+    // (Photos or Files). Set to true by the empty-state tap
+    // handler, cleared by the confirmationDialog's dismiss.
+    @State private var isSourceChooserPresented: Bool = false
+    // Drives the PhotosPicker presented by the source chooser
+    // dialog. Separate from `homePickerItem` (the toolbar's
+    // binding) so the two flows don't race — both write to the
+    // same `homePickerItem` for the import handler, but only one
+    // triggers the picker UI at a time.
+    @State private var isHomePhotosPickerPresented: Bool = false
     @State private var renamingProject: MediaProject?
     @State private var projectRenameDraft: String = ""
+    @State private var homePickerItem: PhotosPickerItem? = nil
+    @State private var pendingImport: ImportTrimRequest?
+    @State private var isPreparingImport = false
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AppPalette.background.ignoresSafeArea()
                 homeScroll
+
+                if isPreparingImport {
+                    importPreparationOverlay
+                }
             }
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
@@ -37,8 +55,8 @@ struct HomeView: View {
             switch result {
             case .success(let urls):
                 if let url = urls.first {
-                    viewModel.importVideoFile(from: url)
-                    selectedTab = .clip
+                    guard !viewModel.isImportingMedia else { return }
+                    prepareFileForNewProject(from: url)
                 }
             case .failure(let error):
                 viewModel.errorMessage = error.localizedDescription
@@ -81,21 +99,106 @@ struct HomeView: View {
             PaywallView()
                 .environmentObject(subscriptionStore)
         }
+        .sheet(item: $pendingImport) { request in
+            ImportTrimSheet(
+                request: request,
+                onImport: { range in
+                    commitNewProjectImport(request, trimRange: range)
+                },
+                onCancel: {
+                    discardPendingImport(request)
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            "Pick a source",
+            isPresented: $isSourceChooserPresented,
+            titleVisibility: .visible
+        ) {
+            // Photos — uses the same `homePickerItem` binding the
+            // toolbar's "Media" button uses, so the picker UI and
+            // import flow are identical. The PhotosPicker is
+            // declared inline in the toolbar; tapping "Photos" here
+            // just toggles a separate PhotosPicker that we'll
+            // present via a fresh picker item.
+            Button("Photos") {
+                guard !viewModel.isImportingMedia, !isPreparingImport else { return }
+                // Use a dedicated picker item so we don't race with
+                // the toolbar's binding. Re-set the existing one —
+                // it already drives the import flow on `.onChange`.
+                homePickerItem = nil
+                // Schedule the picker presentation: the
+                // confirmationDialog dismissal animation must
+                // finish before the PhotosPicker sheet starts,
+                // otherwise iOS cancels one with the other. A
+                // microsecond DispatchQueue.main.async gives the
+                // dialog time to dismiss cleanly.
+                DispatchQueue.main.async {
+                    isHomePhotosPickerPresented = true
+                }
+            }
+            Button("Files") {
+                guard !viewModel.isImportingMedia, !isPreparingImport else { return }
+                isFileImporterPresented = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(
+            isPresented: $isHomePhotosPickerPresented,
+            selection: $homePickerItem,
+            matching: .videos,
+            photoLibrary: .shared()
+        )
     }
 
-    @ViewBuilder
-    private var homeScroll: some View {
-        if subscriptionStore.tier == .free {
+    private var homeScroll: AnyView {
+        AnyView(
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(spacing: 18) {
                     projectHub
-                    upgradeFooter
+
+                    if subscriptionStore.tier == .free {
+                        upgradeFooter
+                    }
                 }
-                .padding(18)
+                .frame(maxWidth: 820)
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 28)
+                .frame(maxWidth: .infinity)
             }
-        } else {
-            projectHub
+        )
+    }
+
+    private var importPreparationOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.42)
+                .ignoresSafeArea()
+
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(AppPalette.accent)
+                Text("Preparing clip")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppPalette.primaryText)
+                Text("Making the source available for trimming.")
+                    .font(.subheadline)
+                    .foregroundStyle(AppPalette.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: 300)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(AppPalette.hairline, lineWidth: 1)
+            }
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Preparing clip for trimming")
     }
 
     private var upgradeFooter: some View {
@@ -112,7 +215,7 @@ struct HomeView: View {
                     Text("Unlock AI cuts + 4K export")
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(AppPalette.primaryText)
-                    Text("Creator from $9.99/mo · Studio from $19.99/mo. Annual saves 40%.")
+                    Text("Creator from $2.99/wk. Annual and lifetime options available.")
                         .font(.caption)
                         .foregroundStyle(AppPalette.secondaryText)
                         .lineLimit(2)
@@ -133,54 +236,44 @@ struct HomeView: View {
         }
     }
 
-    private var projectHub: some View {
-        ScrollView {
+    private var projectHub: AnyView {
+        AnyView(
             VStack(spacing: 18) {
                 projectHero
                 continueLatestCard
                 projectLibrary
             }
-            .frame(maxWidth: 820)
-            .padding(.horizontal, 18)
-            .padding(.top, 18)
-            .padding(.bottom, 28)
-            .frame(maxWidth: .infinity)
-        }
+        )
     }
 
     private var projectHero: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "folder.badge.plus")
-                            .font(.system(size: 13, weight: .bold))
-                        Text("Creator workspace")
-                            .font(.caption.weight(.semibold))
-                            .textCase(.uppercase)
-                            .tracking(1.1)
-                    }
-                    .foregroundStyle(AppPalette.accent)
+            HStack(alignment: .center, spacing: 12) {
+                AppBrandLockup(
+                    iconSize: 46,
+                    titleFont: .system(.title2, design: .rounded).weight(.black)
+                )
 
-                    Text("Projects")
-                        .font(.system(size: 38, weight: .black, design: .rounded))
-                        .foregroundStyle(AppPalette.primaryText)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
+                Spacer(minLength: 0)
+            }
 
-                    Text("Continue a saved cut plan or start fresh from Photos, Files, or a connected drive.")
-                        .font(.subheadline)
-                        .foregroundStyle(AppPalette.secondaryText)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Projects")
+                    .font(.system(size: 30, weight: .black, design: .rounded))
+                    .foregroundStyle(AppPalette.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
 
-                Spacer(minLength: 12)
+                Text("Continue a saved cut plan or start fresh from Photos, Files, or a connected drive.")
+                    .font(.subheadline)
+                    .foregroundStyle(AppPalette.secondaryText)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: 10) {
                 Button {
-                    viewModel.startNewProject()
+                    guard !viewModel.isImportingMedia, !isPreparingImport else { return }
                     isFileImporterPresented = true
                 } label: {
                     Label("Files", systemImage: "externaldrive")
@@ -189,6 +282,7 @@ struct HomeView: View {
                         .frame(height: 52)
                 }
                 .buttonStyle(.plain)
+                .disabled(viewModel.isImportingMedia || isPreparingImport)
                 .foregroundStyle(AppPalette.primaryText)
                 .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay {
@@ -198,7 +292,7 @@ struct HomeView: View {
                 .accessibilityLabel("Create a new project from Files or connected drive")
 
                 PhotosPicker(
-                    selection: $viewModel.selectedItem,
+                    selection: $homePickerItem,
                     matching: .videos,
                     photoLibrary: .shared()
                 ) {
@@ -210,11 +304,15 @@ struct HomeView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(AppPalette.background)
                 .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .onChange(of: viewModel.selectedItem) { _, newItem in
+                .disabled(viewModel.isImportingMedia || isPreparingImport)
+                .onChange(of: homePickerItem) { _, newItem in
                     guard newItem != nil else { return }
-                    viewModel.startNewProjectFromCurrentSelection()
-                    viewModel.importSelectedVideo()
-                    selectedTab = .clip
+                    guard !viewModel.isImportingMedia, !isPreparingImport else {
+                        homePickerItem = nil
+                        return
+                    }
+                    preparePhotoForNewProject(from: newItem!)
+                    homePickerItem = nil
                 }
             }
 
@@ -258,6 +356,94 @@ struct HomeView: View {
         .premiumSurface()
     }
 
+    private func preparePhotoForNewProject(from item: PhotosPickerItem) {
+        guard !isPreparingImport else { return }
+        isPreparingImport = true
+        viewModel.statusMessage = "Preparing clip..."
+
+        Task { @MainActor in
+            do {
+                guard let video = try await item.loadTransferable(type: PickedVideo.self) else {
+                    throw NSError(
+                        domain: "HomeViewImport",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Choose a valid video file."]
+                    )
+                }
+                let request = ImportTrimRequest(
+                    url: video.url,
+                    photoLibraryIdentifier: item.photoLibraryLocalIdentifier ?? video.photoLibraryLocalIdentifier,
+                    sourceName: video.sourceName,
+                    canDiscardSourceOnCancel: video.isWorkspaceCopyNew
+                )
+                pendingImport = request
+                isPreparingImport = false
+            } catch is CancellationError {
+                isPreparingImport = false
+                viewModel.statusMessage = "Import cancelled."
+            } catch {
+                isPreparingImport = false
+                viewModel.errorMessage = error.localizedDescription
+                viewModel.statusMessage = "Could not prepare video."
+            }
+        }
+    }
+
+    private func prepareFileForNewProject(from url: URL) {
+        guard !isPreparingImport else { return }
+        isPreparingImport = true
+        viewModel.statusMessage = "Preparing clip..."
+        let didAccess = url.startAccessingSecurityScopedResource()
+
+        Task { @MainActor in
+            defer {
+                if didAccess {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            do {
+                let copied = try await viewModel.prepareImportCopy(from: url)
+                pendingImport = ImportTrimRequest(
+                    url: copied.url,
+                    photoLibraryIdentifier: nil,
+                    sourceName: url.lastPathComponent,
+                    canDiscardSourceOnCancel: copied.wasCreated
+                )
+                isPreparingImport = false
+            } catch is CancellationError {
+                isPreparingImport = false
+                viewModel.statusMessage = "Import cancelled."
+            } catch {
+                isPreparingImport = false
+                viewModel.errorMessage = error.localizedDescription
+                viewModel.statusMessage = "Could not prepare file."
+            }
+        }
+    }
+
+    private func commitNewProjectImport(_ request: ImportTrimRequest, trimRange: ClipRange?) {
+        pendingImport = nil
+        DispatchQueue.main.async {
+            viewModel.startNewProject()
+            viewModel.importPreparedVideo(
+                from: request.url,
+                photoLibraryIdentifier: request.photoLibraryIdentifier,
+                sourceName: request.sourceName,
+                canDiscardPreparedSource: request.canDiscardSourceOnCancel,
+                trimRange: trimRange
+            )
+            selectedTab = .clip
+        }
+    }
+
+    private func discardPendingImport(_ request: ImportTrimRequest) {
+        if request.canDiscardSourceOnCancel {
+            viewModel.discardPreparedImport(at: request.url)
+        }
+        pendingImport = nil
+    }
+
     /// Build a temp file containing the current project's `.reelclip`
     /// snapshot, then surface the system export sheet so the user can
     /// pick a destination (Files, iCloud Drive, AirDrop, etc.).
@@ -278,7 +464,7 @@ struct HomeView: View {
                     viewModel.continueLatestProject()
                     selectedTab = .clip
                 } label: {
-                    HStack(alignment: .center, spacing: 14) {
+                    HStack(alignment: .center, spacing: 10) {
                         VideoThumbnailView(
                             id: latest.id,
                             url: latest.sourceURL,
@@ -289,7 +475,7 @@ struct HomeView: View {
                         )
                         .frame(width: 86, height: 86)
 
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 6) {
                                 Text("Continue latest")
                                     .font(.caption.weight(.bold))
@@ -318,22 +504,33 @@ struct HomeView: View {
                             .font(.caption.weight(.bold))
                             .foregroundStyle(AppPalette.secondaryText)
                     }
-                    .padding(14)
+                    .padding(12)
                 }
                 .buttonStyle(.plain)
-                .background(AppPalette.raisedSurface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
                         .stroke(AppPalette.hairline, lineWidth: 1)
                 }
             } else {
+                // Tappable empty state. Tap → "Pick a source" dialog
+                // with Photos / Files options. Same chooser flow
+                // the toolbar's Files+Media buttons trigger, so the
+                // user gets a consistent import experience
+                // regardless of where they tap. Copy is action-
+                // oriented (the previous "your latest cut plan
+                // will land here..." is implicit once they tap).
                 PolishKit.EmptyStateView(
                     systemImage: "play.rectangle.on.rectangle",
-                    title: "No project to continue yet",
-                    message: "Pick a video from your Photos or Files — your latest cut plan will land here so you can keep going on the same draft.",
+                    title: "Tap to start a project",
+                    message: "Pick a video from your Photos library or from Files. Your latest cut plan will save here so you can come back to it.",
                     accent: AppPalette.secondaryText,
                     actionTitle: nil,
-                    action: nil
+                    action: nil,
+                    onTap: {
+                        guard !viewModel.isImportingMedia else { return }
+                        isSourceChooserPresented = true
+                    }
                 )
             }
         }
@@ -352,11 +549,24 @@ struct HomeView: View {
     @ViewBuilder
     private var projectLibraryContent: some View {
         if viewModel.projects.isEmpty {
+            // Tappable empty state. Tap → opens the system file
+            // importer filtered to .reelclip. Different intent from
+            // the "Tap to start a project" card above: that one
+            // creates a NEW project from a video, this one
+            // restores an EXISTING project from a portable file.
+            // Copy is action-oriented — "import a .reelclip file
+            // you've shared or backed up".
             PolishKit.EmptyStateView(
                 systemImage: "square.stack.3d.up.slash",
-                title: "No saved projects yet",
-                message: "Each source video becomes one project. Cut plan, mode, prompt, and trim handles all save to this list.",
-                accent: AppPalette.accent
+                title: "Tap to import a .reelclip file",
+                message: "Restored projects come back with every scene, planned clip, mode, and prompt intact. Use this for backups or files you've shared.",
+                accent: AppPalette.accent,
+                actionTitle: nil,
+                action: nil,
+                onTap: {
+                    guard !viewModel.isImportingMedia else { return }
+                    isReelClipImporterPresented = true
+                }
             )
         } else {
             VStack(alignment: .leading, spacing: 14) {
@@ -380,8 +590,10 @@ struct HomeView: View {
     @ViewBuilder
     private var renameAlertContents: some View {
         TextField("Project name", text: $projectRenameDraft)
+            .submitLabel(.done)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.words)
+            .onSubmit { commitProjectRename() }
         Button("Cancel", role: .cancel) {
             renamingProject = nil
         }

@@ -9,35 +9,61 @@ import Combine
 /// `reelclip.subscription`. For local testing we mirror the same IDs in
 /// `ReelClip.storekit` so the scheme can run without network.
 ///
-/// Entitlement resolution order (when a user owns both): Studio always wins
-/// over Creator.
+/// Tier model: a single paid tier, **Creator**. The legacy Studio tier
+/// (weekly/monthly/yearly/lifetime) was dropped in favour of a simpler
+/// two-tier story (Free / Creator) where every paid feature lives on
+/// Creator. Existing Studio lifetime buyers' `rc.studio.lifetime2`
+/// transactions still resolve to the Creator tier via
+/// `tierForProductID(_:)` so they keep their access — the legacy
+/// productId just maps to Creator instead of a now-deleted Studio
+/// tier.
 @MainActor
 final class SubscriptionStore: ObservableObject {
 
     enum Tier: String, Codable, CaseIterable {
         case free
         case creator
-        case studio
     }
 
     enum ProductID: String, CaseIterable {
+        // Weekly — low-commitment entry point alongside the monthly
+        // Creator trial configured in StoreKit.
+        case creatorWeekly  = "rc.creator.weekly"
         case creatorMonthly = "rc.creator.monthly"
         case creatorYearly  = "rc.creator.yearly"
-        case studioMonthly  = "rc.studio.monthly"
-        case studioYearly   = "rc.studio.yearly"
+        // Lifetime — one-time non-consumable purchase. Owns the tier
+        // forever and is surfaced in `ReelClip.storekit` under `products`.
+        case creatorLifetime = "rc.creator.lifetime2"
+        // Legacy Studio productIds kept for entitlement recognition
+        // only — no longer surfaced in `ReelClip.storekit` or on the
+        // paywall. Existing Studio lifetime buyers still resolve to
+        // Creator via `tierForProductID(_:)` so they don't lose
+        // access when the v2.0 build rolls out.
+        case legacyStudioWeekly   = "rc.studio.weekly"
+        case legacyStudioMonthly  = "rc.studio.monthly"
+        case legacyStudioYearly   = "rc.studio.yearly"
+        case legacyStudioLifetime = "rc.studio.lifetime2"
     }
 
     static let groupID = "reelclip.subscription"
 
+    static let activeProductIDs: [String] = [
+        ProductID.creatorWeekly.rawValue,
+        ProductID.creatorMonthly.rawValue,
+        ProductID.creatorYearly.rawValue,
+        ProductID.creatorLifetime.rawValue
+    ]
+
     @Published private(set) var tier: Tier = .free
     @Published private(set) var products: [Product] = []
+    @Published private(set) var missingProductIDs: Set<String> = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var lastError: String?
 
     private var transactionListener: Task<Void, Never>?
 
     init() {
-        transactionListener = Self.listenForTransactions()
+        transactionListener = listenForTransactions()
         Task { await refresh() }
     }
 
@@ -53,31 +79,26 @@ final class SubscriptionStore: ObservableObject {
     }
 
     func purchase(_ product: Product) async -> Bool {
+        lastError = nil
         do {
-            // Pass our stable appAccountToken so Apple's signed JWS carries
-            // it — the Convex backend uses it as the iOS user identifier.
-            let token = AppAccountTokenStore.loadOrCreate()
-            // StoreKit 2's appAccountToken option takes a UUID, not a string.
-            let uuid = UUID(uuidString: token) ?? UUID()
-            let options: Set<Product.PurchaseOption> = [.appAccountToken(uuid)]
-            let result = try await product.purchase(options: options)
+            // StoreKit is the local source of truth. No app-account
+            // identifier or purchase payload is sent to a ReelClip server.
+            let result = try await product.purchase()
             switch result {
             case .success(let verification):
-                if case .verified(let txn) = verification {
-                    // Mirror the verified transaction to Convex so the
-                    // server-side entitlement matches what iOS granted.
-                    // jwsRepresentation lives on the VerificationResult
-                    // wrapper, not on the underlying Transaction.
-                    await reportVerifiedPurchase(
-                        signedTransactionJWS: verification.jwsRepresentation,
-                    )
-                    await txn.finish()
+                guard case .verified(let txn) = verification else {
+                    lastError = "We could not verify this purchase. Please try again."
+                    await refreshTier()
+                    return false
                 }
+
+                await txn.finish()
                 await refreshTier()
-                return true
+                return tier >= tierForProductID(txn.productID)
             case .userCancelled:
                 return false
             case .pending:
+                lastError = "Purchase is pending approval. Access unlocks after Apple confirms it."
                 return false
             @unknown default:
                 return false
@@ -89,6 +110,7 @@ final class SubscriptionStore: ObservableObject {
     }
 
     func restore() async {
+        lastError = nil
         do { try await AppStore.sync() } catch { lastError = error.localizedDescription }
         await refreshTier()
     }
@@ -96,10 +118,9 @@ final class SubscriptionStore: ObservableObject {
     /// Returns true when the active `tier` satisfies the `required` minimum.
     func hasAccess(to required: Tier) -> Bool {
         switch (tier, required) {
-        case (.studio, _): return true
         case (.creator, .creator): return true
         case (.creator, .free): return true
-        case (_, .free): return true
+        case (.free, .free): return true
         default: return false
         }
     }
@@ -108,129 +129,113 @@ final class SubscriptionStore: ObservableObject {
 
     private func loadProducts() async {
         do {
-            let ids = ProductID.allCases.map(\.rawValue)
-            products = try await Product.products(for: Set(ids))
+            // Only request the 4 active Creator productIds from
+            // StoreKit — the legacy Studio IDs are kept for
+            // `tierForProductID` recognition but must not be loaded
+            // into the paywall (they were dropped from the
+            // storekit config in v2.0).
+            let loadedProducts = try await Product.products(for: Set(Self.activeProductIDs))
                 .sorted { lhs, rhs in
                     lhs.price < rhs.price
                 }
+            let loadedIDs = Set(loadedProducts.map(\.id))
+            products = loadedProducts
+            missingProductIDs = Set(Self.activeProductIDs).subtracting(loadedIDs)
+
+            if loadedProducts.isEmpty {
+                lastError = "No live ReelClip products were returned. Confirm the four product IDs are configured for app.reelclip.ios in App Store Connect."
+            } else if !missingProductIDs.isEmpty {
+                lastError = "Some ReelClip plans are unavailable in App Store Connect."
+            } else {
+                lastError = nil
+            }
         } catch {
             products = []
-            lastError = error.localizedDescription
+            missingProductIDs = Set(Self.activeProductIDs)
+            lastError = "StoreKit could not load live pricing: \(error.localizedDescription)"
         }
     }
 
-    /// Resolves the effective tier by combining:
-    ///   1. StoreKit 2 `.verified` entitlements (canonical local truth)
-    ///   2. The Convex entitlement mirror (catches web-side Stripe subs
-    ///      and any renewals that happened while the app was closed, once
-    ///      we wire App Store Server Notifications + the Convex webhook).
-    /// We take the higher of the two — Convex can only match what iOS
-    /// reports, so it can't lower a verified StoreKit subscription.
+    /// Resolves the effective tier from StoreKit 2 verified entitlements.
+    /// StoreKit receives renewals, restores, refunds, and revocations through
+    /// its local entitlement APIs and transaction update stream.
     private func refreshTier() async {
-        let localTier = await localStoreKitTier()
-        tier = max(localTier, await convexTier())
+        tier = await localStoreKitTier()
     }
 
     /// Walk StoreKit 2's `currentEntitlements` and pick the highest tier
     /// among `.verified` transactions. Failed verifications are skipped —
-    /// the user can `Restore` to retry, and the server will catch any
-    /// genuine ownership via `/iap/verify`.
+    /// the user can restore purchases to retry.
     private func localStoreKitTier() async -> Tier {
         var resolved: Tier = .free
         for await result in Transaction.currentEntitlements {
-            guard case .verified(let txn) = result else { continue }
+            guard case .verified(let txn) = result,
+                  txn.revocationDate == nil else { continue }
             resolved = max(resolved, tierForProductID(txn.productID))
         }
         return resolved
     }
 
-    /// Ask the Convex backend for the user's resolved tier. Returns `.free`
-    /// on any failure (network down, server not configured, etc.) so the
-    /// StoreKit-derived tier still wins — never block the user from their
-    /// paid features because the server is unreachable.
-    private func convexTier() async -> Tier {
-        let token = AppAccountTokenStore.loadOrCreate()
-        do {
-            let result = try await convexClient.lookupTier(appAccountToken: token)
-            return Self.tier(from: result.tier)
-        } catch {
-            // Surface the failure but don't escalate to lastError — the
-            // local StoreKit tier is still authoritative.
-            #if DEBUG
-            print("[ConvexEntitlement] lookup failed: \(error.localizedDescription)")
-            #endif
-            return .free
-        }
-    }
-
-    /// Map the Convex backend's tier enum (string-raw-valued) to ours.
-    /// Both enums share rawValues so this is a one-line coercion — kept
-    /// explicit so future divergence is visible.
-    private static func tier(from raw: ConvexEntitlementClient.Tier) -> Tier {
-        switch raw {
-        case .free: return .free
-        case .creator: return .creator
-        case .studio: return .studio
-        }
-    }
-
-    /// Verify a StoreKit 2 verified transaction against Apple's
-    /// `getTransactionInfo` via Convex. Called from `purchase(_:)` after
-    /// the local StoreKit purchase completes successfully.
-    func reportVerifiedPurchase(signedTransactionJWS: String) async {
-        let token = AppAccountTokenStore.loadOrCreate()
-        do {
-            let result = try await convexClient.verifyPurchase(
-                signedTransactionJWS: signedTransactionJWS,
-                appAccountToken: token,
-            )
-            // Take the max so we don't downgrade from a higher local tier
-            // if the server returns a stale value.
-            tier = max(tier, Self.tier(from: result.tier))
-        } catch {
-            // Non-fatal — StoreKit verified the transaction; we just lost
-            // the chance to mirror it server-side. The next launch's
-            // refreshTier() will retry.
-            #if DEBUG
-            print("[ConvexEntitlement] verify failed: \(error.localizedDescription)")
-            #endif
-        }
-    }
-
+    /// Resolve a productId to its tier. Both Creator and the legacy
+    /// Studio IDs map to `.creator` — Studio is gone as a tier but
+    /// the entitlements it granted are absorbed into Creator (30-min
+    /// sources, SRT/VTT, etc.) so the user's access is preserved
+    /// across the v2.0 transition.
     private func tierForProductID(_ productID: String) -> Tier {
         switch productID {
-        case ProductID.studioMonthly.rawValue, ProductID.studioYearly.rawValue:
-            return .studio
-        case ProductID.creatorMonthly.rawValue, ProductID.creatorYearly.rawValue:
+        case ProductID.creatorWeekly.rawValue,
+             ProductID.creatorMonthly.rawValue,
+             ProductID.creatorYearly.rawValue,
+             ProductID.creatorLifetime.rawValue,
+             ProductID.legacyStudioWeekly.rawValue,
+             ProductID.legacyStudioMonthly.rawValue,
+             ProductID.legacyStudioYearly.rawValue,
+             ProductID.legacyStudioLifetime.rawValue:
             return .creator
         default:
             return .free
         }
     }
 
-    private static func listenForTransactions() -> Task<Void, Never> {
-        Task.detached(priority: .background) {
+    private func listenForTransactions() -> Task<Void, Never> {
+        Task(priority: .background) { [weak self] in
             for await update in Transaction.updates {
-                guard case .verified(_) = update else { continue }
-                await MainActor.run {
-                    NotificationCenter.default.post(name: .subscriptionTierDidChange, object: nil)
-                }
+                guard let self,
+                      case .verified(let transaction) = update else { continue }
+
+                await transaction.finish()
+                await self.refreshTier()
             }
         }
     }
 
-    /// Shared HTTP client. Lazily initialized so unit tests can swap the
-    /// base URL by injecting a custom instance.
-    private lazy var convexClient = ConvexEntitlementClient()
+}
+
+// MARK: - ProductID helpers
+
+extension SubscriptionStore.ProductID {
+    /// True for the legacy Studio productIds — kept in the enum for
+    /// entitlement recognition (existing lifetime buyers' transactions
+    /// still resolve to Creator) but stripped from the paywall and
+    /// from `loadProducts()`'s StoreKit request.
+    var isLegacyStudio: Bool {
+        switch self {
+        case .legacyStudioWeekly, .legacyStudioMonthly,
+             .legacyStudioYearly, .legacyStudioLifetime:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 // MARK: - Tier ordering
 
 extension SubscriptionStore.Tier: Comparable {
-    /// Studio > Creator > Free. Used by `max(_:_:)` in `refreshTier` and
-    /// `reportVerifiedPurchase` to take the higher of two sources.
+    /// Creator > Free. Used by `max(_:_:)` in `refreshTier` and
+    /// local StoreKit entitlements.
     static func < (lhs: SubscriptionStore.Tier, rhs: SubscriptionStore.Tier) -> Bool {
-        let order: [SubscriptionStore.Tier] = [.free, .creator, .studio]
+        let order: [SubscriptionStore.Tier] = [.free, .creator]
         return order.firstIndex(of: lhs)! < order.firstIndex(of: rhs)!
     }
 }
@@ -247,7 +252,6 @@ extension SubscriptionStore.Tier {
         switch self {
         case .free:   return "Free"
         case .creator: return "Creator"
-        case .studio:  return "Studio"
         }
     }
 
@@ -255,9 +259,8 @@ extension SubscriptionStore.Tier {
     /// on this tier.
     var tagline: String {
         switch self {
-        case .free:    return "Get started"
-        case .creator: return "Unlimited AI cuts + 4K export"
-        case .studio:  return "Priority renders + direct share"
+        case .free:    return "Starter tools included"
+        case .creator: return "Unlimited AI cuts + clean exports"
         }
     }
 }

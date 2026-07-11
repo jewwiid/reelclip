@@ -10,6 +10,13 @@ struct WaveformStrip: View {
     var frameDuration: Double = 1.0 / 30.0
     var onSelectRange: ((Int) -> Void)? = nil
     var onUpdateRange: ((Int, ClipRange) -> Void)? = nil
+    /// Fires when the user taps empty timeline space (no drag).
+    /// The argument is the time (in seconds) under the tap point.
+    /// Used to drive the parent's "tap outside deselects" logic
+    /// — without this the waveform's `DragGesture(minimumDistance: 0)`
+    /// eats every touch as a scrub and never tells the parent that
+    /// the user wanted to deselect.
+    var onTap: ((Double) -> Void)? = nil
     /// In-progress clip selection the user is positioning on the timeline
     /// before committing via "Add to plan".
     var draftHighlight: ClipRange? = nil
@@ -22,43 +29,58 @@ struct WaveformStrip: View {
     var thumbnails: [MediaThumbnail] = []
     var stripHeight: CGFloat = 52
 
+    @ViewBuilder
+    private func draftHighlightLayer(timeline: TimelineGeometry, size: CGSize) -> some View {
+        if let draft = draftHighlight {
+            // Draft highlight — drawn first so planned ranges paint
+            // on top (gives the visual hierarchy: working selection
+            // is "above" the timeline, committed clips are solid).
+            // The inner WaveformStrip is for audio-only context
+            // (the slider row beneath the film strip) and does
+            // not own a big video preview — its edge drag is a
+            // no-op.
+            DraftHighlightView(
+                range: draft,
+                timeline: timeline,
+                size: size,
+                thumbnails: thumbnails,
+                onMove: onMoveDraft,
+                onResizeEnd: onResizeDraftEnd,
+                onResizeStart: onResizeDraftStart,
+                onEdgeDragPreview: nil
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func plannedRangeLayer(timeline: TimelineGeometry, size: CGSize) -> some View {
+        if !plannedRanges.isEmpty {
+            ForEach(Array(plannedRanges.enumerated()), id: \.offset) { index, range in
+                RangeInteractionView(
+                    index: index,
+                    range: range,
+                    timeline: timeline,
+                    size: size,
+                    isSelected: index == selectedRangeIndex,
+                    frameDuration: frameDuration,
+                    thumbnails: thumbnails,
+                    onSelectRange: onSelectRange,
+                    onUpdateRange: onUpdateRange,
+                    onToggleLock: nil,
+                    onEdgeDragPreview: nil,
+                    onScrub: onScrub
+                )
+            }
+        }
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
                 waveformCanvas(size: proxy.size)
-
                 if let timeline = TimelineGeometry(size: proxy.size, duration: duration) {
-                    // Draft highlight — drawn first so planned ranges paint
-                    // on top (gives the visual hierarchy: working selection
-                    // is "above" the timeline, committed clips are solid).
-                    if let draft = draftHighlight {
-                        DraftHighlightView(
-                            range: draft,
-                            timeline: timeline,
-                            size: proxy.size,
-                            thumbnails: thumbnails,
-                            onMove: onMoveDraft,
-                            onResizeEnd: onResizeDraftEnd,
-                            onResizeStart: onResizeDraftStart
-                        )
-                    }
-                }
-
-                if let timeline = TimelineGeometry(size: proxy.size, duration: duration),
-                   !plannedRanges.isEmpty {
-                    ForEach(Array(plannedRanges.enumerated()), id: \.offset) { index, range in
-                        RangeInteractionView(
-                            index: index,
-                            range: range,
-                            timeline: timeline,
-                            size: proxy.size,
-                            isSelected: index == selectedRangeIndex,
-                            frameDuration: frameDuration,
-                            thumbnails: thumbnails,
-                            onSelectRange: onSelectRange,
-                            onUpdateRange: onUpdateRange
-                        )
-                    }
+                    draftHighlightLayer(timeline: timeline, size: proxy.size)
+                    plannedRangeLayer(timeline: timeline, size: proxy.size)
                 }
             }
             .contentShape(Rectangle())
@@ -66,6 +88,25 @@ struct WaveformStrip: View {
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
                         scrub(at: value.location.x, width: proxy.size.width)
+                    }
+                    .onEnded { value in
+                        // The waveform's drag eats every touch, so
+                        // we have to detect "tap" ourselves by
+                        // checking the total drag distance on end.
+                        // Below the threshold, treat it as a tap
+                        // and forward to the parent's onTap so the
+                        // deselect logic fires. Threshold matches
+                        // the iOS system tap tolerance (~10pt) so
+                        // intentional drags still scrub freely.
+                        let dragDistance = hypot(value.translation.width, value.translation.height)
+                        guard dragDistance < 10 else { return }
+                        guard duration.isFinite,
+                              duration > 0,
+                              proxy.size.width.isFinite,
+                              proxy.size.width > 0
+                        else { return }
+                        let ratio = min(max(Double(value.location.x / proxy.size.width), 0), 1)
+                        onTap?(duration * ratio)
                     }
             )
         }
@@ -215,17 +256,24 @@ struct WaveformStrip: View {
                 }
             }
 
-            // 4. Scrub line + dot.
+            // 4. Scrub indicator — vertical pill, same design family as the
+            // trim handles and range boundary markers. Slim accent pill,
+            // full strip height, drawn on top of the waveform so the
+            // current playhead is always visible.
             let scrubX = timeline.xPosition(for: scrubPosition)
-            var path = Path()
-            path.move(to: CGPoint(x: scrubX, y: 0))
-            path.addLine(to: CGPoint(x: scrubX, y: size.height))
-            context.stroke(path, with: .color(AppPalette.accent), lineWidth: 2)
-
-            context.fill(
-                Path(ellipseIn: CGRect(x: scrubX - 4, y: size.height / 2 - 4, width: 8, height: 8)),
-                with: .color(AppPalette.accent)
+            let scrubPillWidth: CGFloat = 3
+            let scrubPillRect = CGRect(
+                x: scrubX - scrubPillWidth / 2,
+                y: 0,
+                width: scrubPillWidth,
+                height: size.height
             )
+            let scrubPillPath = Path(
+                roundedRect: scrubPillRect,
+                cornerRadius: scrubPillWidth / 2,
+                style: .continuous
+            )
+            context.fill(scrubPillPath, with: .color(AppPalette.accent))
         }
     }
 
@@ -236,34 +284,34 @@ struct WaveformStrip: View {
         color: Color,
         isSelected: Bool
     ) {
+        // Small vertical pill — same design family as the trim handles
+        // (white pill + accent border) and the scrub indicator (accent
+        // pill). Width + height grow slightly when the range is selected
+        // so the marker has a subtle "this one is active" affordance
+        // without changing the visual language.
         guard size.width > 0, size.height > 0, xPosition.isFinite else { return }
 
-        let lineWidth: CGFloat = isSelected ? 2.4 : 1.6
-        let radius: CGFloat = isSelected ? 4.5 : 3.5
-        let x = min(max(xPosition, radius), max(radius, size.width - radius))
-        var line = Path()
-        line.move(to: CGPoint(x: x, y: 0))
-        line.addLine(to: CGPoint(x: x, y: size.height))
-        context.stroke(
-            line,
-            with: .color(color.opacity(isSelected ? 0.95 : 0.78)),
-            lineWidth: lineWidth
+        let pillWidth: CGFloat = isSelected ? 2.4 : 1.8
+        let pillHeight: CGFloat = isSelected ? 22 : 16
+        let pillOpacity: Double = isSelected ? 0.95 : 0.72
+        let halfWidth = pillWidth / 2
+        let clampedX = min(
+            max(xPosition, halfWidth),
+            max(halfWidth, size.width - halfWidth)
         )
-
-        let topDotRect = CGRect(
-            x: x - radius,
-            y: 3,
-            width: radius * 2,
-            height: radius * 2
+        let yOffset = (size.height - pillHeight) / 2
+        let pillRect = CGRect(
+            x: clampedX - halfWidth,
+            y: yOffset,
+            width: pillWidth,
+            height: pillHeight
         )
-        let bottomDotRect = CGRect(
-            x: x - radius,
-            y: max(3, size.height - (radius * 2) - 3),
-            width: radius * 2,
-            height: radius * 2
+        let pillPath = Path(
+            roundedRect: pillRect,
+            cornerRadius: halfWidth,
+            style: .continuous
         )
-        context.fill(Path(ellipseIn: topDotRect), with: .color(color))
-        context.fill(Path(ellipseIn: bottomDotRect), with: .color(color))
+        context.fill(pillPath, with: .color(color.opacity(pillOpacity)))
     }
 
     private func scrub(at xPosition: CGFloat, width: CGFloat) {
@@ -345,37 +393,63 @@ struct RangeInteractionView: View {
     let thumbnails: [MediaThumbnail]
     let onSelectRange: ((Int) -> Void)?
     let onUpdateRange: ((Int, ClipRange) -> Void)?
+    /// Called when the user long-presses the body. Toggles the lock state
+    /// of the planned clip — the parent view model handles the actual
+    /// mutation; this view just fires the callback.
+    let onToggleLock: ((Int) -> Void)?
+    /// Called continuously while the user drags an edge handle. The
+    /// argument is the current seconds at the handle (start edge →
+    /// new `range.startSeconds`; end edge → new `range.endSeconds`).
+    /// The parent wires this to the big video preview above so the
+    /// user sees the exact frame they're about to commit in the
+    /// larger view instead of a small tooltip pinned to the
+    /// timeline. Previously this fired `(position, seconds)` to
+    /// drive a frame-thumbnail tooltip overlay; that overlay is
+    /// gone (collapses the timeline's vertical footprint by the
+    /// tooltip-clearance) and the bigger preview is the new
+    /// feedback surface.
+    let onEdgeDragPreview: ((Double) -> Void)?
+    /// Called continuously while the user drags the body of a
+    /// selected range. The argument is the new playhead position
+    /// in source seconds, clamped to `[range.startSeconds,
+    /// range.endSeconds]`. The parent view model routes this
+    /// through `updateScrubPosition` so the preview seeks live.
+    /// Replaces the old "body drag moves the range" gesture — the
+    /// edge handles above still control in/out, so the body
+    /// gesture is free to do something more useful.
+    let onScrub: ((Double) -> Void)?
 
     @State private var startDragBase: ClipRange?
     @State private var endDragBase: ClipRange?
-    @State private var bodyDragBase: ClipRange?
-    /// Which handle is currently being dragged — drives the frame tooltip.
-    @State private var draggingEdge: DraggingEdge? = nil
+    /// Playhead position at the start of a body scrub drag. We
+    /// stash it on `.onChanged` (first call) so subsequent updates
+    /// compute the new position relative to where the drag began,
+    /// not where the previous frame was. Without this, fast drags
+    /// accumulate sub-frame drift.
+    @State private var scrubDragBase: Double? = nil
 
-    // Trim handles — Doc: smaller, edge-only geometry.
+    // Visual handles are intentionally tiny; the transparent hit zones below
+    // are larger and split at the range midpoint when the edges get close.
+    // That keeps both edges draggable even on very short clips.
     //
-    // Earlier values (18 visible + 18 padding + 38 tall on a 52 strip)
-    // left the handles eating 73% of the strip's height AND overlapping
-    // the range body by 27pt on each side. Users trying to drag the
-    // body to slide the range would grab a handle instead.
-    //
-    // New geometry:
-    //   • visible pill: 8 × 24 (less than half the strip height, leaves
-    //     room above + below for the waveform to read)
-    //   • hit padding: 12pt on the OUTSIDE of the range, 6pt on the
-    //     INSIDE — so finger drags near the inner edge still
-    //     unambiguously hit the body, not the handle
-    //   • minWidthForHandles raised to 50 so we don't show handles on
-    //     sub-second ranges where they're useless
-    //   • body gets its own drag gesture (slide whole range) — was tap-only
-    // Slimmer than the previous 8×24: 5pt visible width × 18pt tall
-    // feels closer to a native iOS scrubber handle and reads as "thin
-    // grab edge" rather than a chunky grip.
-    private let handleVisibleWidth: CGFloat = 5
-    private let handleHeight: CGFloat = 18
-    private let handleOutsidePadding: CGFloat = 10
+    // Hit zones are sized so the user can ALWAYS recover from an
+    // over-eager trim — even when the body is collapsed to near-zero
+    // width, each edge has a guaranteed 8pt of grab room outside the
+    // body and 4pt inside. Earlier sizing (4pt visible / 6pt outside
+    // / 3pt inside) collapsed to sub-pixel hit zones when the body
+    // shrank past a frame, and the user had to delete + replan the
+    // range to recover. This sizing keeps the handles grabbable no
+    // matter how narrow the body.
+    private let handleVisibleWidth: CGFloat = 6
+    private let handleHeight: CGFloat = 22
+    private let handleOutsidePadding: CGFloat = 8
     private let handleInsidePadding: CGFloat = 4
-    private let minWidthForHandles: CGFloat = 40
+    /// Minimum body width in seconds. The edge drag handlers clamp
+    /// to this so the user can never collapse a range below a
+    /// usable size — even if the underlying ClipRangeEditor minimum
+    /// is 0.05s, we don't let the user get to a state where the
+    // handle hit zones are visually overlapping.
+    private let minHandleRangeDuration: Double = 0.5
 
     var body: some View {
         let startX = timeline.xPosition(for: range.startSeconds)
@@ -392,6 +466,14 @@ struct RangeInteractionView: View {
             // swallow the tap when `minimumDistance` is 0.
             // `minimumDistance: 4` so a tap (finger down + up with <4pt
             // movement) still counts as a tap, not a drag.
+            //
+            // Long-press anywhere on the body toggles the lock state for
+            // this clip. Locked clips can't be moved or trimmed — useful
+            // when you're adjusting neighboring clips and don't want to
+            // accidentally bump this one. The long-press is a separate
+            // gesture from the drag, so quick taps + drags still work
+            // exactly as before; only a held press (≥ 0.5s without
+            // movement) triggers the lock.
             Rectangle()
                 .fill(Color.clear)
                 .contentShape(Rectangle())
@@ -400,82 +482,134 @@ struct RangeInteractionView: View {
                 .onTapGesture {
                     onSelectRange?(index)
                 }
+                .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 30) {
+                    guard let toggle = onToggleLock else { return }
+                    PolishKit.Haptics.success.play()
+                    toggle(index)
+                }
                 .simultaneousGesture(bodyDrag(width: timeline.width))
 
-            if isSelected, width >= minWidthForHandles {
-                // Left edge handle. Hit target extends 12pt OUTSIDE the range
-                // (where there are no other gestures) and 6pt INSIDE (small
-                // enough that finger drags near the middle of the body still
-                // hit the body's slide gesture).
-                ZStack {
-                    Color.clear
-                    trimHandle(isStart: true)
-                }
-                .frame(width: handleVisibleWidth + handleOutsidePadding + handleInsidePadding, height: handleHeight)
-                .contentShape(Rectangle())
-                .offset(
-                    x: startX - (handleVisibleWidth + handleOutsidePadding + handleInsidePadding) / 2 + handleInsidePadding,
-                    y: (size.height - handleHeight) / 2
-                )
-                .gesture(startHandleDrag(width: timeline.width))
-
-                // Right edge handle.
-                ZStack {
-                    Color.clear
-                    trimHandle(isStart: false)
-                }
-                .frame(width: handleVisibleWidth + handleOutsidePadding + handleInsidePadding, height: handleHeight)
-                .contentShape(Rectangle())
-                .offset(
-                    x: endX - (handleVisibleWidth + handleOutsidePadding + handleInsidePadding) / 2 - handleInsidePadding,
-                    y: (size.height - handleHeight) / 2
-                )
-                .gesture(endHandleDrag(width: timeline.width))
+            // Lock icon — appears in the centre of the body when the
+            // clip is locked. Hidden when unlocked. Sized to match the
+            // handle grip affordance and gated on `width >= 28` so a
+            // locked micro-clip doesn't get a lock icon overlapping
+            // its handle. `.allowsHitTesting(false)` so the icon never
+            // intercepts a body tap.
+            if range.isLocked && width >= 28 {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12, weight: .black))
+                    .foregroundStyle(AppPalette.accent)
+                    .frame(width: 14, height: 14)
+                    .offset(
+                        x: startX + width / 2 - 7,
+                        y: (size.height - 14) / 2
+                    )
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
 
-            // Frame tooltip — appears above the handle while dragging.
-            if let edge = draggingEdge {
-                let seconds = edge == .start ? range.startSeconds : range.endSeconds
-                let x = timeline.xPosition(for: seconds)
-                HandleFrameTooltip(
-                    seconds: seconds,
-                    xPosition: x,
-                    thumbnails: thumbnails
+            if isSelected {
+                let hitZones = edgeHandleHitZones(
+                    startX: startX,
+                    endX: endX,
+                    trackWidth: timeline.width,
+                    outsideReach: handleOutsidePadding,
+                    insideReach: handleInsidePadding + handleVisibleWidth
                 )
+                let hitHeight = min(size.height, max(handleHeight, 34))
+                let hitY = (size.height - hitHeight) / 2
+                let visualY = (size.height - handleHeight) / 2
+
+                trimHandle(isStart: true)
+                    .frame(width: handleVisibleWidth, height: handleHeight)
+                    .offset(
+                        x: min(max(startX - handleVisibleWidth / 2, 0), max(0, timeline.width - handleVisibleWidth)),
+                        y: visualY
+                    )
+                    .allowsHitTesting(false)
+                    .zIndex(2)
+
+                trimHandle(isStart: false)
+                    .frame(width: handleVisibleWidth, height: handleHeight)
+                    .offset(
+                        x: min(max(endX - handleVisibleWidth / 2, 0), max(0, timeline.width - handleVisibleWidth)),
+                        y: visualY
+                    )
+                    .allowsHitTesting(false)
+                    .zIndex(2)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: hitZones.startWidth, height: hitHeight)
+                    .contentShape(Rectangle())
+                    .offset(x: hitZones.startX, y: hitY)
+                    .zIndex(3)
+                    .gesture(startHandleDrag(width: timeline.width))
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: hitZones.endWidth, height: hitHeight)
+                    .contentShape(Rectangle())
+                    .offset(x: hitZones.endX, y: hitY)
+                    .zIndex(3)
+                    .gesture(endHandleDrag(width: timeline.width))
             }
+
+            // Frame tooltip is rendered OUTSIDE this view by
+            // VideoTimelineView, in an overlay above the clip
+            // shape. Rendering it here would put it inside the
+            // timeline's rounded-rect clip and clip the frame
+            // preview behind the container border. The drag
+            // callbacks above push the active position via
+            // `onEdgeDragChange`, and the parent reads it.
         }
         .frame(width: timeline.width, height: size.height, alignment: .topLeading)
-        .allowsHitTesting(width >= 8) // skip hit testing for sub-pixel slivers
+        // Keep hit testing alive even for sub-pixel ranges. The split
+        // transparent edge zones below are the recovery path when a
+        // user trims a clip very narrow; disabling the whole view here
+        // made those handles impossible to grab again.
+        .allowsHitTesting(true)
     }
 
     /// Body-drag — slide the whole range without resizing. Snaps so the
     /// resulting range stays on frame boundaries.
     /// `minimumDistance: 4` so taps (down + up, <4pt) register as taps for
-    /// `onSelectRange`; anything ≥4pt is a drag.
+    /// `onSelectRange`; anything ≥4pt is a scrub drag.
+    /// Body drag now scrubs the playhead within the selected
+    /// range — translating the body moves the preview's playhead
+    /// from `range.startSeconds` toward `range.endSeconds` (or
+    /// back). The edge handles above still control the range's
+    /// in/out points, so the body gesture is free to do
+    /// something more useful. We deliberately do NOT block on
+    /// `range.isLocked` — a locked clip should still be
+    /// previewable at any of its positions, and the lock only
+    /// means "don't move / resize me".
     private func bodyDrag(width: CGFloat) -> some Gesture {
         let totalDuration = timeline.duration
         return DragGesture(minimumDistance: 4)
             .onChanged { value in
-                guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
-                if bodyDragBase == nil { bodyDragBase = range }
-                guard let base = bodyDragBase else { return }
-                let delta = Double(value.translation.width / width) * totalDuration
-                let proposedStart = base.startSeconds + delta
-                let length = base.endSeconds - base.startSeconds
-                // Clamp so the range stays inside the source.
-                let clampedStart = min(max(proposedStart, 0), max(0, totalDuration - length))
-                let clampedEnd = clampedStart + length
-                let edited = ClipRangeEditor.updatedRange(
-                    base,
-                    totalDuration: totalDuration,
-                    frameDuration: frameDuration,
-                    startSeconds: clampedStart,
-                    endSeconds: clampedEnd
-                )
-                onUpdateRange?(index, edited)
+                guard let scrub = onScrub,
+                      isSelected,
+                      totalDuration.isFinite,
+                      totalDuration > 0,
+                      width.isFinite,
+                      width > 0
+                else { return }
+                if scrubDragBase == nil { scrubDragBase = range.startSeconds }
+                guard let baseSeconds = scrubDragBase else { return }
+                // Map drag distance to source seconds. The body
+                // spans `range.endSeconds - range.startSeconds`
+                // horizontally; translating the full width of the
+                // body moves the playhead across the whole range.
+                let bodyWidth = width * CGFloat((range.endSeconds - range.startSeconds) / totalDuration)
+                guard bodyWidth > 0 else { return }
+                let delta = Double(value.translation.width / bodyWidth) * (range.endSeconds - range.startSeconds)
+                let proposed = baseSeconds + delta
+                let clamped = min(max(proposed, range.startSeconds), range.endSeconds)
+                scrub(clamped)
             }
             .onEnded { _ in
-                bodyDragBase = nil
+                scrubDragBase = nil
             }
     }
 
@@ -489,21 +623,47 @@ struct RangeInteractionView: View {
         let totalDuration = timeline.duration
         return DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
-                if startDragBase == nil { startDragBase = range; draggingEdge = .start }
+                // Locked clips ignore the handle drag — the user has
+                // to long-press to unlock first.
+                guard !range.isLocked,
+                      totalDuration.isFinite, totalDuration > 0,
+                      width.isFinite, width > 0
+                else { return }
+                if startDragBase == nil { startDragBase = range }
                 let base = startDragBase ?? range
                 let delta = Double(value.translation.width / width) * totalDuration
+                // Clamp the proposed start so the body stays at
+                // least `minHandleRangeDuration` seconds wide. The
+                // underlying ClipRangeEditor minimum is much
+                // smaller (~0.05s) which is below the visual
+                // handle hit zone threshold — without this clamp
+                // the user can collapse the body past the point
+                // where either handle is grabbable and there's no
+                // way to recover short of deleting + replanning the
+                // range. 0.5s matches the smallest body width that
+                // keeps both hit zones ≥ 8pt on a typical 30s video
+                // at 1x zoom.
+                let proposedStart = base.startSeconds + delta
+                let maxStart = max(0, base.endSeconds - minHandleRangeDuration)
+                let minStart = min(maxStart, base.endSeconds - minHandleRangeDuration)
+                let clampedStart = min(max(proposedStart, minStart), maxStart)
                 let edited = ClipRangeEditor.updatedRange(
                     base,
                     totalDuration: totalDuration,
                     frameDuration: frameDuration,
-                    startSeconds: base.startSeconds + delta
+                    startSeconds: clampedStart
                 )
                 onUpdateRange?(index, edited)
+                // Fire the edge-preview callback with the current
+                // handle position (seconds at the new edge). The
+                // parent routes this to the big video preview
+                // above so the user sees the exact frame they're
+                // about to commit in the larger view, instead of
+                // a small tooltip pinned to the timeline.
+                onEdgeDragPreview?(edited.startSeconds)
             }
             .onEnded { _ in
                 startDragBase = nil
-                draggingEdge = nil
             }
     }
 
@@ -511,21 +671,34 @@ struct RangeInteractionView: View {
         let totalDuration = timeline.duration
         return DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
-                if endDragBase == nil { endDragBase = range; draggingEdge = .end }
+                // Locked clips ignore the handle drag — the user has
+                // to long-press to unlock first.
+                guard !range.isLocked,
+                      totalDuration.isFinite, totalDuration > 0,
+                      width.isFinite, width > 0
+                else { return }
+                if endDragBase == nil { endDragBase = range }
                 let base = endDragBase ?? range
                 let delta = Double(value.translation.width / width) * totalDuration
+                // Symmetric clamp to the start-handle drag: keep the
+                // body ≥ `minHandleRangeDuration` seconds wide so
+                // the user can't collapse past the threshold where
+                // the hit zones overlap into a sub-pixel sliver.
+                let proposedEnd = base.endSeconds + delta
+                let minEnd = max(minHandleRangeDuration, base.startSeconds + minHandleRangeDuration)
+                let maxEnd = totalDuration
+                let clampedEnd = min(max(proposedEnd, minEnd), maxEnd)
                 let edited = ClipRangeEditor.updatedRange(
                     base,
                     totalDuration: totalDuration,
                     frameDuration: frameDuration,
-                    endSeconds: base.endSeconds + delta
+                    endSeconds: clampedEnd
                 )
                 onUpdateRange?(index, edited)
+                onEdgeDragPreview?(edited.endSeconds)
             }
             .onEnded { _ in
                 endDragBase = nil
-                draggingEdge = nil
             }
     }
 }
@@ -583,14 +756,53 @@ struct TimelineGeometry {
     }
 }
 
+private struct EdgeHandleHitZones {
+    let startX: CGFloat
+    let startWidth: CGFloat
+    let endX: CGFloat
+    let endWidth: CGFloat
+}
+
+private func edgeHandleHitZones(
+    startX: CGFloat,
+    endX: CGFloat,
+    trackWidth: CGFloat,
+    outsideReach: CGFloat,
+    insideReach: CGFloat
+) -> EdgeHandleHitZones {
+    guard trackWidth.isFinite, trackWidth > 0 else {
+        return EdgeHandleHitZones(startX: 0, startWidth: 1, endX: 0, endWidth: 1)
+    }
+
+    let safeStart = min(max(min(startX, endX), 0), trackWidth)
+    let safeEnd = min(max(max(startX, endX), 0), trackWidth)
+    let clipWidth = max(safeEnd - safeStart, 0)
+    let halfClipWidth = clipWidth / 2
+    let safeOutsideReach = max(outsideReach, 0)
+    let safeInsideReach = max(insideReach, 0)
+    let insideOverlapLimit = min(safeInsideReach, halfClipWidth)
+
+    let startLeft = min(max(safeStart - safeOutsideReach, 0), trackWidth)
+    let startRight = min(max(safeStart + insideOverlapLimit, startLeft), trackWidth)
+    let endLeft = min(max(safeEnd - insideOverlapLimit, 0), trackWidth)
+    let endRight = min(max(safeEnd + safeOutsideReach, endLeft), trackWidth)
+
+    return EdgeHandleHitZones(
+        startX: startLeft,
+        startWidth: max(startRight - startLeft, 1),
+        endX: endLeft,
+        endWidth: max(endRight - endLeft, 1)
+    )
+}
+
 enum ClipRangeFormatter {
     static func title(for range: ClipRange) -> String {
         "\(formatTime(range.startSeconds)) - \(formatTime(range.endSeconds))"
     }
 
     static func durationLabel(for range: ClipRange) -> String {
-        guard range.duration.isFinite, range.duration >= 0 else { return "-- sec" }
-        return "\(String(format: "%.1f", range.duration)) sec"
+        guard range.duration.isFinite, range.duration >= 0 else { return "--" }
+        return formatDuration(range.duration)
     }
 
     static func formatTime(_ seconds: Double) -> String {
@@ -607,6 +819,35 @@ enum ClipRangeFormatter {
 
         return "\(minutes):\(String(format: "%02d.%d", wholeSeconds, tenths))"
     }
+
+    /// Long-form duration: "5s", "5.5s" under a minute; "1m05s",
+    /// "1m05.5s", "59m59s" once a minute boundary is crossed. Replaces
+    /// the old "X sec" / "X.X sec" output that ran "65s" instead of
+    /// "1m05s" for clips over a minute. Used in chip labels and the
+    /// export preview duration column.
+    static func formatDuration(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "--" }
+        let totalTenths = Int((seconds * 10).rounded())
+        let minutes = totalTenths / 600
+        let secsTenths = totalTenths % 600
+        let wholeSecs = secsTenths / 10
+        let tenths = secsTenths % 10
+
+        if minutes == 0 {
+            // Under a minute: "5s" or "5.5s" — no leading zero on
+            // the seconds, no minute prefix, no padded width.
+            return tenths == 0
+                ? "\(wholeSecs)s"
+                : String(format: "%d.%ds", wholeSecs, tenths)
+        }
+        // 1+ minutes: "1m05s" / "1m05.5s". Two-digit seconds
+        // with leading zero so the column reads cleanly when the
+        // user scans a list.
+        let secsPart = tenths == 0
+            ? String(format: "%02d", wholeSecs)
+            : String(format: "%02d.%d", wholeSecs, tenths)
+        return "\(minutes)m\(secsPart)s"
+    }
 }
 
 struct EditableClipRangeBar: View {
@@ -615,10 +856,34 @@ struct EditableClipRangeBar: View {
     let frameDuration: Double
     let thumbnails: [MediaThumbnail]
     let onChange: (ClipRange) -> Void
+    /// Called continuously while the user drags the body of the
+    /// range (the middle area between the two edge handles). The
+    /// argument is the new playhead position in source seconds,
+    /// clamped to `[range.startSeconds, range.endSeconds]`. The
+    /// parent view model routes this through `updateScrubPosition`
+    /// so the preview seeks live. Matches the body-drag behaviour
+    /// of `RangeInteractionView` on the main timeline preview, so
+    /// the two surfaces feel identical.
+    let onScrub: ((Double) -> Void)?
 
     @State private var startDragBase: ClipRange?
     @State private var endDragBase: ClipRange?
-    @State private var draggingEdge: DraggingEdge? = nil
+    /// Playhead position at the start of a body scrub drag. We
+    /// stash it on `.onChanged` (first call) so subsequent updates
+    /// compute the new position relative to where the drag began,
+    /// not where the previous frame was. Without this, fast drags
+    /// accumulate sub-frame drift. Matches the same state on
+    /// `RangeInteractionView`.
+    @State private var scrubDragBase: Double? = nil
+
+    // Match `RangeInteractionView` exactly so the two surfaces feel
+    // identical: small visual handles with larger, split-at-midpoint
+    // hit zones. Keeps the body grab area always present, even on
+    // very short clips.
+    private let handleVisibleWidth: CGFloat = 6
+    private let handleHeight: CGFloat = 22
+    private let handleOutsidePadding: CGFloat = 8
+    private let handleInsidePadding: CGFloat = 4
 
     var body: some View {
         GeometryReader { proxy in
@@ -628,43 +893,87 @@ struct EditableClipRangeBar: View {
             let endRatio = min(max(range.endSeconds / totalDuration, 0), 1)
             let startX = width * startRatio
             let endX = width * endRatio
-            let selectedWidth = max(endX - startX, 10)
-            let handleWidth: CGFloat = 28
-            let handleHeight: CGFloat = 30
+            let selectedStartX = min(max(min(startX, endX), 0), width)
+            let selectedEndX = min(max(max(startX, endX), 0), width)
+            let selectedWidth = max(selectedEndX - selectedStartX, 0)
+            let hitZones = edgeHandleHitZones(
+                startX: startX,
+                endX: endX,
+                trackWidth: width,
+                outsideReach: handleOutsidePadding,
+                insideReach: handleInsidePadding
+            )
 
             ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(AppPalette.timelineBlock)
+                // Body — fills the space between the two edge handles
+                // and serves as the middle-grab / scrub surface. Uses
+                // the same accent fill as the timeline preview's
+                // selected-range. Z-ordered below the handles.
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(AppPalette.timelineBlock)
 
-                Capsule()
-                    .fill(AppPalette.accent.opacity(0.78))
-                    .frame(width: selectedWidth)
-                    .offset(x: startX)
+                    if selectedWidth > 0 {
+                        Rectangle()
+                            .fill(AppPalette.accent.opacity(0.78))
+                            .frame(width: selectedWidth)
+                            .offset(x: selectedStartX)
+                    }
+                }
+                .frame(width: width, height: handleHeight)
+                .clipShape(Capsule())
+
+                // Middle grab area — sits between the two edge handle
+                // hit zones. Dragging it scrubs the playhead within
+                // the range (1:1 with body width, clamped to
+                // [startSeconds, endSeconds]). Mirrors the body-drag
+                // behaviour of `RangeInteractionView`. `minimumDistance:
+                // 4` so a tap still counts as a tap, not a drag.
+                if selectedWidth > 0, onScrub != nil {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .contentShape(Rectangle())
+                        .frame(width: max(selectedWidth - hitZones.startWidth - hitZones.endWidth, 0), height: handleHeight)
+                        .offset(x: selectedStartX + hitZones.startWidth)
+                        .zIndex(3)
+                        .gesture(bodyScrubDrag(width: width, totalDuration: totalDuration, selectedStartX: selectedStartX, selectedEndX: selectedEndX))
+                }
 
                 rowTrimHandle(isStart: true)
-                    .frame(width: handleWidth, height: handleHeight)
-                    .offset(x: min(max(startX - handleWidth / 2, 0), width - handleWidth))
-                    .contentShape(Rectangle())
+                    .frame(width: handleVisibleWidth, height: handleHeight)
+                    .offset(x: min(max(startX - handleVisibleWidth / 2, 0), width - handleVisibleWidth))
+                    .allowsHitTesting(false)
                     .zIndex(2)
-                    .gesture(startHandleDrag(totalDuration: totalDuration, width: width))
 
                 rowTrimHandle(isStart: false)
-                    .frame(width: handleWidth, height: handleHeight)
-                    .offset(x: min(max(endX - handleWidth / 2, 0), width - handleWidth))
-                    .contentShape(Rectangle())
+                    .frame(width: handleVisibleWidth, height: handleHeight)
+                    .offset(x: min(max(endX - handleVisibleWidth / 2, 0), width - handleVisibleWidth))
+                    .allowsHitTesting(false)
                     .zIndex(2)
-                    .gesture(endHandleDrag(totalDuration: totalDuration, width: width))
 
-                if let draggingEdge {
-                    let seconds = draggingEdge == .start ? range.startSeconds : range.endSeconds
-                    let xPosition = draggingEdge == .start ? startX : endX
-                    HandleFrameTooltip(
-                        seconds: seconds,
-                        xPosition: min(max(xPosition, 24), max(24, width - 24)),
-                        thumbnails: thumbnails
-                    )
-                    .zIndex(3)
-                }
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: hitZones.startWidth, height: handleHeight)
+                    .contentShape(Rectangle())
+                    .offset(x: hitZones.startX)
+                    .zIndex(4)
+                    .gesture(startHandleDrag(totalDuration: totalDuration, width: width))
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: hitZones.endWidth, height: handleHeight)
+                    .contentShape(Rectangle())
+                    .offset(x: hitZones.endX)
+                    .zIndex(4)
+                    .gesture(endHandleDrag(totalDuration: totalDuration, width: width))
+                // No inline frame tooltip here — the big video
+                // preview above reflects the edge being dragged
+                // via the `onEdgeDragPreview` callback. The old
+                // tooltip rendered a small frame thumb inside the
+                // timeline strip; collapsing it removes ~58pt of
+                // vertical real-estate under the timeline row
+                // and gives the user a much larger view of the
+                // exact frame they're about to commit.
             }
         }
         .frame(height: 34)
@@ -698,7 +1007,6 @@ struct EditableClipRangeBar: View {
                 guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
                 let base = startDragBase ?? range
                 startDragBase = base
-                draggingEdge = .start
                 let delta = Double(value.translation.width / width) * totalDuration
                 let edited = ClipRangeEditor.updatedRange(
                     base,
@@ -710,7 +1018,6 @@ struct EditableClipRangeBar: View {
             }
             .onEnded { _ in
                 startDragBase = nil
-                draggingEdge = nil
             }
     }
 
@@ -720,19 +1027,54 @@ struct EditableClipRangeBar: View {
                 guard totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
                 let base = endDragBase ?? range
                 endDragBase = base
-                draggingEdge = .end
                 let delta = Double(value.translation.width / width) * totalDuration
                 let edited = ClipRangeEditor.updatedRange(
                     base,
-                    totalDuration: totalDuration,
-                    frameDuration: frameDuration,
-                    endSeconds: base.endSeconds + delta
-                )
-                onChange(edited)
+                     totalDuration: totalDuration,
+                     frameDuration: frameDuration,
+                     endSeconds: base.endSeconds + delta
+                 )
+                 onChange(edited)
+             }
+              .onEnded { _ in
+                  endDragBase = nil
+              }
+    }
+
+    /// Body-drag gesture for the centre of the range. Scrubs the
+    /// playhead within `[range.startSeconds, range.endSeconds]` and
+    /// reports the new position via `onScrub`. The translation is
+    /// relative to the body width (selectedStartX…selectedEndX), not
+    /// the full track — so a fast 200pt swipe moves the playhead by
+    /// exactly that fraction of the clip's own duration, regardless
+    /// of how short the clip is relative to the full source. Matches
+    /// `RangeInteractionView.bodyDrag` semantics. `minimumDistance: 0`
+    /// is required so the gesture is detected immediately on
+    /// touch-down (the small body width means anything > 2pt would
+    /// already feel sluggish).
+    private func bodyScrubDrag(width: CGFloat, totalDuration: Double, selectedStartX: CGFloat, selectedEndX: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard let onScrub, totalDuration.isFinite, totalDuration > 0, width.isFinite, width > 0 else { return }
+                let bodyWidth = max(selectedEndX - selectedStartX, 1)
+                // Anchor the playhead at the centre of the range on
+                // touch-down, then add the user's drag translation.
+                // This way the playhead "follows the finger" 1:1
+                // regardless of where on the body the user pressed.
+                let base: Double
+                if let stashed = scrubDragBase {
+                    base = stashed
+                } else {
+                    base = (range.startSeconds + range.endSeconds) / 2
+                    scrubDragBase = base
+                }
+                let delta = Double(value.translation.width / bodyWidth) * (range.endSeconds - range.startSeconds)
+                let proposed = base + delta
+                let clamped = min(max(proposed, range.startSeconds), range.endSeconds)
+                onScrub(clamped)
             }
             .onEnded { _ in
-                endDragBase = nil
-                draggingEdge = nil
+                scrubDragBase = nil
             }
     }
 }
@@ -753,23 +1095,30 @@ struct DraftHighlightView: View {
     let onMove: ((Double) -> Void)?
     let onResizeEnd: ((Double) -> Void)?
     let onResizeStart: ((Double) -> Void)?
+    /// Called continuously while the user drags a draft edge
+    /// handle. The argument is the current seconds at the
+    /// handle. The parent routes this to the big video preview
+    /// above so the user sees the exact frame they're about to
+    /// commit in the larger view instead of a small tooltip
+    /// pinned to the timeline. Previously this was
+    /// `onEdgeDragChange` with `(position, seconds)` driving an
+    /// inline frame-thumbnail tooltip; that overlay is gone.
+    var onEdgeDragPreview: ((Double) -> Void)? = nil
 
     @State private var bodyDragBaseStart: Double? = nil
     @State private var startEdgeBase: Double? = nil
     @State private var endEdgeBase: Double? = nil
-    /// Which edge is currently being dragged — drives the frame tooltip.
-    @State private var draggingEdge: DraggingEdge? = nil
+    /// True while the user is touching the body — drives the brighter
+    /// fill and the centre grip affordance that tells the user
+    /// "this region is draggable, not just decorative".
+    @State private var isBodyPressed: Bool = false
 
-    // Handle geometry — matches `RangeInteractionView` so dragging the
-    // draft's edges feels identical to dragging a committed clip's edges.
-    // Slimmer than the previous 8×24: 5pt visible width × 18pt tall
-    // feels closer to a native iOS scrubber handle and reads as "thin
-    // grab edge" rather than a chunky grip.
-    private let handleVisibleWidth: CGFloat = 5
-    private let handleHeight: CGFloat = 18
-    private let handleOutsidePadding: CGFloat = 10
-    private let handleInsidePadding: CGFloat = 4
-    private let minWidthForHandles: CGFloat = 40
+    // Matches `RangeInteractionView`: small visual handles with larger,
+    // non-overlapping hit zones so short drafts keep both edges draggable.
+    private let handleVisibleWidth: CGFloat = 4
+    private let handleHeight: CGFloat = 22
+    private let handleOutsidePadding: CGFloat = 6
+    private let handleInsidePadding: CGFloat = 3
 
     var body: some View {
         let startX = timeline.xPosition(for: range.startSeconds)
@@ -777,10 +1126,12 @@ struct DraftHighlightView: View {
         let width = max(endX - startX, 1)
 
         return ZStack(alignment: .topLeading) {
-            // Body — drag to slide the whole draft. Dashed accent border
-            // distinguishes the working draft from committed clips.
+            // Body — drag to slide the whole draft. This uses a high-priority
+            // gesture because the draft often lives inside a horizontal
+            // ScrollView; without priority, grabbing the centre can pan the
+            // timeline instead of moving the highlight.
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(AppPalette.accent.opacity(0.18))
+                .fill(AppPalette.accent.opacity(isBodyPressed ? 0.32 : 0.18))
                 .overlay {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .strokeBorder(
@@ -791,62 +1142,99 @@ struct DraftHighlightView: View {
                 .frame(width: width, height: size.height)
                 .offset(x: startX, y: 0)
                 .contentShape(Rectangle())
-                .gesture(bodyDrag(width: timeline.width))
+                .highPriorityGesture(bodyDrag(width: timeline.width))
 
-            // Edge handles — only when the draft is wide enough.
-            if width >= minWidthForHandles {
-                // Left edge.
-                ZStack {
-                    Color.clear
-                    draftTrimHandle(isStart: true)
-                }
-                .frame(width: handleVisibleWidth + handleOutsidePadding + handleInsidePadding, height: handleHeight)
-                .contentShape(Rectangle())
-                .offset(
-                    x: startX - (handleVisibleWidth + handleOutsidePadding + handleInsidePadding) / 2 + handleInsidePadding,
-                    y: (size.height - handleHeight) / 2
-                )
-                .gesture(startEdgeDrag(width: timeline.width))
-
-                // Right edge.
-                ZStack {
-                    Color.clear
-                    draftTrimHandle(isStart: false)
-                }
-                .frame(width: handleVisibleWidth + handleOutsidePadding + handleInsidePadding, height: handleHeight)
-                .contentShape(Rectangle())
-                .offset(
-                    x: endX - (handleVisibleWidth + handleOutsidePadding + handleInsidePadding) / 2 - handleInsidePadding,
-                    y: (size.height - handleHeight) / 2
-                )
-                .gesture(endEdgeDrag(width: timeline.width))
+            // Grip affordance — appears in the centre of the body while
+            // the highlight exists. It stays visible after release so the user
+            // has a persistent centre target to grab again.
+            if width >= 36 {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 14, weight: .black))
+                    .foregroundStyle(AppPalette.accent.opacity(isBodyPressed ? 1 : 0.72))
+                    .frame(width: 44, height: 34)
+                    .contentShape(Rectangle())
+                    .offset(
+                        x: startX + width / 2 - 22,
+                        y: (size.height - 34) / 2
+                    )
+                    .highPriorityGesture(bodyDrag(width: timeline.width))
+                    .accessibilityHidden(true)
+                    .zIndex(2)
             }
 
-            // Frame tooltip — appears above the handle while dragging.
-            if let edge = draggingEdge {
-                let seconds = edge == .start ? range.startSeconds : range.endSeconds
-                let x = timeline.xPosition(for: seconds)
-                HandleFrameTooltip(
-                    seconds: seconds,
-                    xPosition: x,
-                    thumbnails: thumbnails
+            // Edge handles remain active even when the draft becomes
+            // visually tiny. The hit zones split at the midpoint so
+            // both edges can still be recovered instead of forcing a
+            // delete-and-recreate flow.
+            let hitZones = edgeHandleHitZones(
+                startX: startX,
+                endX: endX,
+                trackWidth: timeline.width,
+                outsideReach: handleOutsidePadding,
+                insideReach: handleInsidePadding + handleVisibleWidth
+            )
+            let hitHeight = min(size.height, max(handleHeight, 34))
+            let hitY = (size.height - hitHeight) / 2
+            let visualY = (size.height - handleHeight) / 2
+
+            draftTrimHandle(isStart: true)
+                .frame(width: handleVisibleWidth, height: handleHeight)
+                .offset(
+                    x: min(max(startX - handleVisibleWidth / 2, 0), max(0, timeline.width - handleVisibleWidth)),
+                    y: visualY
                 )
-            }
+                .allowsHitTesting(false)
+                .zIndex(2)
+
+            draftTrimHandle(isStart: false)
+                .frame(width: handleVisibleWidth, height: handleHeight)
+                .offset(
+                    x: min(max(endX - handleVisibleWidth / 2, 0), max(0, timeline.width - handleVisibleWidth)),
+                    y: visualY
+                )
+                .allowsHitTesting(false)
+                .zIndex(2)
+
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: hitZones.startWidth, height: hitHeight)
+                .contentShape(Rectangle())
+                .offset(x: hitZones.startX, y: hitY)
+                .zIndex(3)
+                .highPriorityGesture(startEdgeDrag(width: timeline.width))
+
+            Rectangle()
+                .fill(Color.clear)
+                .frame(width: hitZones.endWidth, height: hitHeight)
+                .contentShape(Rectangle())
+                .offset(x: hitZones.endX, y: hitY)
+                .zIndex(3)
+                .highPriorityGesture(endEdgeDrag(width: timeline.width))
         }
         .frame(width: timeline.width, height: size.height, alignment: .topLeading)
-        .allowsHitTesting(width >= 8)
+        .allowsHitTesting(true)
     }
 
     private func bodyDrag(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                // Light up the body on the very first touch so the user
+                // knows the body is interactive. This is the only place
+                // isBodyPressed becomes true; the reset lives in onEnded.
+                if !isBodyPressed {
+                    isBodyPressed = true
+                    PolishKit.Haptics.selection.play()
+                }
                 guard width > 0 else { return }
                 let base = bodyDragBaseStart ?? range.startSeconds
                 if bodyDragBaseStart == nil { bodyDragBaseStart = base }
                 let delta = Double(value.translation.width / width) * timeline.duration
                 onMove?(base + delta)
             }
-            .onEnded { _ in bodyDragBaseStart = nil }
+            .onEnded { _ in
+                isBodyPressed = false
+                bodyDragBaseStart = nil
+            }
     }
 
     /// Left edge — drag to change the draft's start. Calls `onResizeStart`
@@ -855,12 +1243,17 @@ struct DraftHighlightView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard width > 0 else { return }
-                if startEdgeBase == nil { startEdgeBase = range.startSeconds; draggingEdge = .start }
+                if startEdgeBase == nil { startEdgeBase = range.startSeconds }
                 let base = startEdgeBase ?? range.startSeconds
                 let delta = Double(value.translation.width / width) * timeline.duration
-                onResizeStart?(base + delta)
+                let proposed = base + delta
+                onResizeStart?(proposed)
+                let seconds = min(max(proposed, 0), range.endSeconds)
+                onEdgeDragPreview?(seconds)
             }
-            .onEnded { _ in startEdgeBase = nil; draggingEdge = nil }
+            .onEnded { _ in
+                startEdgeBase = nil
+            }
     }
 
     /// Right edge — drag to change the draft's end. Calls `onResizeEnd`.
@@ -868,12 +1261,17 @@ struct DraftHighlightView: View {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard width > 0 else { return }
-                if endEdgeBase == nil { endEdgeBase = range.endSeconds; draggingEdge = .end }
+                if endEdgeBase == nil { endEdgeBase = range.endSeconds }
                 let base = endEdgeBase ?? range.endSeconds
                 let delta = Double(value.translation.width / width) * timeline.duration
-                onResizeEnd?(base + delta)
+                let proposed = base + delta
+                onResizeEnd?(proposed)
+                let seconds = min(max(proposed, range.startSeconds), timeline.duration)
+                onEdgeDragPreview?(seconds)
             }
-            .onEnded { _ in endEdgeBase = nil; draggingEdge = nil }
+            .onEnded { _ in
+                endEdgeBase = nil
+            }
     }
 
     /// Visual handle for the draft edges — same pill shape as the committed
@@ -899,56 +1297,14 @@ struct DraftHighlightView: View {
     }
 }
 
-/// Which timeline edge is being dragged — used by the frame tooltip.
-enum DraggingEdge {
-    case start
-    case end
-}
-
-/// Frame thumbnail tooltip shown above a handle while the user drags it
-/// along the timeline. Displays the nearest source video frame + timecode.
-/// Appears above the strip (negative y offset), centered on the handle's
-/// x-position. Auto-disappears when the drag ends.
-struct HandleFrameTooltip: View {
-    let seconds: Double
-    let xPosition: CGFloat
-    let thumbnails: [MediaThumbnail]
-
-    private var closestThumbnail: MediaThumbnail? {
-        guard !thumbnails.isEmpty else { return nil }
-        return thumbnails.min {
-            abs($0.timeSeconds - seconds) < abs($1.timeSeconds - seconds)
-        }
-    }
-
-    var body: some View {
-        if let thumb = closestThumbnail {
-            VStack(spacing: 0) {
-                Image(uiImage: thumb.image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 48, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(AppPalette.accent, lineWidth: 2)
-                    }
-                    .shadow(color: Color.black.opacity(0.4), radius: 6, y: 3)
-
-                Text(ClipRangeFormatter.formatTime(seconds))
-                    .font(.system(size: 10, weight: .black, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(AppPalette.accent, in: Capsule())
-                    .offset(y: -2)
-            }
-            .offset(
-                x: xPosition - 24, // center the 48pt-wide tooltip on the handle
-                y: -50              // raise above the strip
-            )
-            .allowsHitTesting(false)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
-        }
-    }
-}
+// `HandleFrameTooltip` (the small frame-thumbnail bubble that
+// used to pop above a handle while the user dragged it along the
+// timeline) is gone, along with the `DraggingEdge` enum that
+// only existed to drive it. The bigger video preview above the
+// timeline now reflects the edge being dragged via the
+// `onEdgeDragPreview` callback on `RangeInteractionView` /
+// `DraftHighlightView`, so the tooltip's frame thumbnail
+// became redundant — the user already sees the exact frame
+// they're about to commit in the larger view. Removing the
+// tooltip also drops the 58pt `tooltipClearance` that
+// `VideoTimelineView` previously reserved above the strip.

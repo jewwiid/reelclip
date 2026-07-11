@@ -15,6 +15,12 @@ struct TranscriptView: View {
     var canExport: Bool
     var onRequestUpgrade: (() -> Void)?
 
+    /// Transcript-pane "Process" action. Runs silence detection on the
+    /// source audio and concatenates the non-silent ranges into a
+    /// single MP4. Disabled while the viewModel is already processing.
+    var canProcess: Bool
+    var onProcess: (() -> Void)?
+
     @State private var exportShare: ExportShareContext?
     /// When `false`, only the header is visible — useful when the user
     /// needs more vertical room for the timeline. Tap the chevron to
@@ -29,6 +35,11 @@ struct TranscriptView: View {
         f.zeroFormattingBehavior = [.pad]
         return f
     }()
+
+    /// Keeps transcript review useful inside the editor's main vertical
+    /// scroll view. Rows scroll inside this viewport instead of pushing the
+    /// timeline and recipe controls indefinitely down the page.
+    private static let transcriptViewportMaxHeight: CGFloat = 360
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -55,13 +66,20 @@ struct TranscriptView: View {
                 }
             }
         }
-        .premiumSurface()
+        // Note: no `.premiumSurface()` here — the parent
+        // `transcriptSection` already wraps the title +
+        // TranscriptView content in one card. Adding another
+        // surface here would produce card-in-card double
+        // containers, which the user flagged as inconsistent.
         .animation(.snappy(duration: 0.22), value: isExpanded)
         .onChange(of: state) { _, newState in
             // Light tap confirmation when STT finishes — the longest "did
             // anything happen" gap in the app, deserves feedback.
             if case .ready = newState {
                 PolishKit.Haptics.success.play()
+            }
+            if newState == .ready {
+                isExpanded = true
             }
         }
         .sheet(item: $exportShare) { ctx in
@@ -74,7 +92,7 @@ struct TranscriptView: View {
         }
     }
 
-    // MARK: - Transcript exports (Studio feature)
+    // MARK: - Transcript exports (Creator feature since v2.0)
 
     private func exportTranscript(as format: TranscriptExportFormat) {
         guard let transcript, !transcript.isEmpty else { return }
@@ -105,44 +123,63 @@ struct TranscriptView: View {
 
     // MARK: - Header
 
+    /// Compact actions row at the top of the transcript card. The
+    /// title + subtitle + collapse chevron live in the outer
+    /// `collapsibleSectionTitle` (see `transcriptSection` in
+    /// `ClipView.swift`) so the same pattern as Planned clips /
+    /// Cut recipe applies — one consistent title row across all
+    /// sections, no double-title card-in-card container.
+    ///
+    /// Order: state pill → export buttons → retranscribe button.
+    /// When the section is collapsed, the outer chevron hides the
+    /// whole card; when expanded, the user sees the actions row at
+    /// the top of the card and the transcript body below it.
     private var header: some View {
-        HStack(spacing: 11) {
-            Image(systemName: "text.bubble")
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(AppPalette.accent)
-                .frame(width: 32, height: 32)
-                .background(AppPalette.accent.opacity(0.12), in: Circle())
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Transcript")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(AppPalette.primaryText)
-                Text(headerSubtitle)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppPalette.secondaryText)
-            }
-
+        HStack(spacing: 10) {
             Spacer(minLength: 0)
-
-            statePill
 
             exportButtons
 
-            Button {
-                onRetranscribe()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.primaryText)
-                    .frame(width: 30, height: 30)
-                    .background(AppPalette.raisedSurface, in: Circle())
+            // "Process" — runs on-device silence detection (SmartCutAnalyzer)
+            // and concatenates the kept ranges into ONE single MP4. Shown
+            // whenever a transcript is present; disabled while the parent
+            // viewModel is already processing. Accent-green fill when ready
+            // so the user reads it as the primary CTA on this row.
+            // "waveform.path.badge.minus" evokes "remove silent gaps".
+            //
+            // The retranscribe / "retry" button was removed — Process
+            // already covers the "rerun this" intent via its canProcess
+            // gate, and the state pill ("Ready"/"Transcribing"/"Failed")
+            // was removed too. The Process button's disabled/active
+            // state carries the same signal.
+            if let transcript, !transcript.isEmpty {
+                Button {
+                    onProcess?()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "waveform.path.badge.minus")
+                            .font(.caption2.weight(.bold))
+                        Text("Process")
+                            .font(.caption2.weight(.black))
+                    }
+                    .foregroundStyle(canProcess ? AppPalette.background : AppPalette.mutedText)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        canProcess ? AppPalette.accent : AppPalette.raisedSurface,
+                        in: Capsule()
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Process: detect silences and tighten into one clip")
+                .polishPressFeedback()
+                .disabled(!canProcess)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Retranscribe")
-            .polishPressFeedback()
 
-            // Collapse/expand toggle. Chevron rotates 180° between
-            // states so the affordance reads as "press to flip".
+            // Local collapse/expand toggle. The outer
+            // `collapsibleSectionTitle` chevron toggles whether the
+            // whole card is rendered; this chevron toggles whether
+            // the transcript body is visible inside the card.
             Button {
                 isExpanded.toggle()
                 PolishKit.Haptics.tap(.light).play()
@@ -155,14 +192,21 @@ struct TranscriptView: View {
                     .rotationEffect(.degrees(isExpanded ? 0 : 180))
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(isExpanded ? "Collapse transcript" : "Expand transcript")
+            .accessibilityLabel(isExpanded ? "Collapse transcript body" : "Expand transcript body")
             .polishPressFeedback()
         }
     }
 
     @ViewBuilder
     private var exportButtons: some View {
-        if canExport, let transcript, !transcript.isEmpty {
+        // Free-vs-Creator gate removed in v2.0 — the Creator
+        // SRT/VTT badge that surfaced on this row was confusing
+        // users who'd already paid and asked "why is it still
+        // locked?" Free users can still export the transcript as
+        // SRT/VTT (the unlock happened upstream in the tier
+        // model). The buttons render whenever a transcript is
+        // ready.
+        if let transcript, !transcript.isEmpty {
             HStack(spacing: 6) {
                 Button { exportTranscript(as: .srt) } label: {
                     HStack(spacing: 4) {
@@ -194,28 +238,7 @@ struct TranscriptView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Export VTT subtitle file")
             }
-        } else if let transcript, !transcript.isEmpty {
-            Button { onRequestUpgrade?() } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "lock.fill")
-                        .font(.caption2.weight(.bold))
-                    Text("Studio · SRT/VTT")
-                        .font(.caption2.weight(.black))
-                }
-                .foregroundStyle(AppPalette.mutedText)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(AppPalette.controlSurface, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Unlock Studio to export SRT and VTT subtitle files")
         }
-    }
-
-    private var headerSubtitle: String {
-        guard let transcript else { return "Speech-to-text runs on-device" }
-        let count = transcript.wordCount
-        return "\(count) word\(count == 1 ? "" : "s") · \(transcript.segments.count) segment\(transcript.segments.count == 1 ? "" : "s")"
     }
 
     @ViewBuilder
@@ -246,209 +269,296 @@ struct TranscriptView: View {
 
     // MARK: - Teleprompter
 
+    @ViewBuilder
     private func segmentList(transcript: Transcript) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            ForEach(transcript.segments) { segment in
-                segmentBlock(segment)
-            }
-        }
-    }
+        let segments = transcript.segments.sorted { $0.startSeconds < $1.startSeconds }
+        let silences = detectedSilences(in: segments)
 
-    private func segmentBlock(_ segment: TranscriptSegment) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: segment.fullyKept(plannedRanges: plannedRanges) ? "checkmark.circle.fill" : "xmark.circle")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(segment.fullyKept(plannedRanges: plannedRanges) ? AppPalette.accent : AppPalette.mutedText)
-                Text(Self.timeFormatter.string(from: segment.startSeconds) ?? "0:00")
-                    .font(.caption.monospacedDigit().weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-                Spacer(minLength: 0)
-                if segment.fullyCut(plannedRanges: plannedRanges) {
-                    Text("Cut")
+            if !silences.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform.path.badge.minus")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppPalette.accent)
+                    Text("\(silences.count) detected silence\(silences.count == 1 ? "" : "s")")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppPalette.secondaryText)
+                    Spacer(minLength: 0)
+                    Text("Review")
                         .font(.caption2.weight(.black))
-                        .foregroundStyle(AppPalette.mutedText)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(AppPalette.mutedText.opacity(0.18), in: Capsule())
-                } else if segment.fullyKept(plannedRanges: plannedRanges) {
-                    Text("Kept")
-                        .font(.caption2.weight(.black))
-                        .foregroundStyle(AppPalette.background)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(AppPalette.accent, in: Capsule())
+                        .foregroundStyle(AppPalette.accent)
                 }
             }
 
-            // Horizontal-scrollable row of word chips. Words used to wrap across
-            // multiple lines via `FlowLayout`; now they sit on a single
-            // line the user can scrub horizontally — closer to a real
-            // teleprompter feel, and keeps every word at the same vertical
-            // position so it's easy to scan "kept vs cut" at a glance.
-            ScrollView(.horizontal, showsIndicators: true) {
-                HStack(alignment: .center, spacing: 4) {
-                    ForEach(segment.words) { word in
-                        wordChip(word)
+            ScrollView(.vertical, showsIndicators: true) {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
+                        if let silence = silences.first(where: { $0.beforeSegmentID == segment.id }) {
+                            silenceRow(silence)
+                        }
+                        segmentCard(segment)
                     }
                 }
                 .padding(.horizontal, 2)
-                .padding(.vertical, 2)
+                .padding(.vertical, 4)
             }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 96, maxHeight: Self.transcriptViewportMaxHeight)
             .scrollIndicators(.visible)
         }
     }
 
-    private func wordChip(_ word: TranscriptWord) -> some View {
-        let isKept = word.isKept(plannedRanges)
-        let isCut = word.isCut(plannedRanges)
+    private func segmentCard(_ segment: TranscriptSegment) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("Speech")
+                    .font(.caption2.weight(.black))
+                    .foregroundStyle(AppPalette.accent)
+                if !plannedRanges.isEmpty {
+                    Text(overlapsPlannedRange(segment) ? "Kept" : "Outside selected plan")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(
+                            overlapsPlannedRange(segment)
+                                ? AppPalette.success
+                                : AppPalette.mutedText
+                        )
+                }
+                Spacer(minLength: 0)
+            }
+            segmentBlock(segment)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(AppPalette.controlSurface)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+    }
 
-        return Button {
-            onTapWord(word)
+    private func silenceRow(_ silence: DetectedSilence) -> some View {
+        Button {
+            onTapWord(
+                TranscriptWord(
+                    text: "Detected silence",
+                    startSeconds: silence.startSeconds,
+                    endSeconds: silence.endSeconds
+                )
+            )
+            PolishKit.Haptics.tap(.light).play()
         } label: {
-            Text(word.text)
-                .font(.title3.monospacedDigit().weight(.medium))
-                .foregroundStyle(
-                    isCut
-                        ? AppPalette.mutedText
-                        : (isKept ? AppPalette.primaryText : AppPalette.secondaryText)
-                )
-                .strikethrough(isCut, color: AppPalette.mutedText)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(
-                    isKept ? AppPalette.accent.opacity(0.18) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                )
+            HStack(spacing: 8) {
+                Image(systemName: "waveform.path.badge.minus")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppPalette.danger)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Detected silence")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppPalette.primaryText)
+                    Text("\(timeLabel(silence.startSeconds)) → \(timeLabel(silence.endSeconds)) · \(durationLabel(silence.duration))")
+                        .font(.caption2.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "play.circle")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppPalette.accent)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppPalette.danger.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(AppPalette.danger.opacity(0.30), lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(word.text) at \(Self.timeFormatter.string(from: word.startSeconds) ?? "")")
+        .accessibilityLabel(
+            "Detected silence from \(timeLabel(silence.startSeconds)) to \(timeLabel(silence.endSeconds))"
+        )
     }
 
-    // MARK: - Empty / error states
+    private func detectedSilences(in segments: [TranscriptSegment]) -> [DetectedSilence] {
+        guard segments.count > 1 else { return [] }
+        return zip(segments, segments.dropFirst()).compactMap { previous, next in
+            let start = max(previous.endSeconds, 0)
+            let end = max(next.startSeconds, start)
+            let duration = end - start
+            guard duration >= 0.35 else { return nil }
+            return DetectedSilence(
+                id: "\(previous.id.uuidString)-\(next.id.uuidString)",
+                beforeSegmentID: next.id,
+                startSeconds: start,
+                endSeconds: end
+            )
+        }
+    }
+
+    private func overlapsPlannedRange(_ segment: TranscriptSegment) -> Bool {
+        plannedRanges.contains { range in
+            max(range.startSeconds, segment.startSeconds) < min(range.endSeconds, segment.endSeconds)
+        }
+    }
+
+    private func timeLabel(_ seconds: Double) -> String {
+        Self.timeFormatter.string(from: seconds) ?? "0:00"
+    }
+
+    private func durationLabel(_ seconds: Double) -> String {
+        String(format: "%.1fs", seconds)
+    }
+
+    private func segmentBlock(_ segment: TranscriptSegment) -> some View {
+        let hasWords = !segment.words.isEmpty
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(Self.timeFormatter.string(from: segment.startSeconds) ?? "0:00")
+                    .font(.caption2.monospacedDigit().weight(.black))
+                    .foregroundStyle(AppPalette.accent)
+                Text("→")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(AppPalette.secondaryText)
+                Text(Self.timeFormatter.string(from: segment.endSeconds) ?? "0:00")
+                    .font(.caption2.monospacedDigit().weight(.black))
+                    .foregroundStyle(AppPalette.secondaryText)
+                Spacer(minLength: 0)
+            }
+            if hasWords {
+                FlowLayoutHStack {
+                    ForEach(segment.words) { word in
+                        wordChip(word)
+                    }
+                }
+            } else {
+                Text(segment.text)
+                    .font(.body)
+                    .foregroundStyle(AppPalette.primaryText)
+            }
+        }
+    }
+
+    private func wordChip(_ word: TranscriptWord) -> some View {
+        Button {
+            onTapWord(word)
+            PolishKit.Haptics.tap(.light).play()
+        } label: {
+            Text(word.text)
+                .font(.body)
+                .foregroundStyle(AppPalette.primaryText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(AppPalette.raisedSurface, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Jump to \(word.text) at \(Self.timeFormatter.string(from: word.startSeconds) ?? "0:00")")
+    }
+
+    // MARK: - Placeholders
 
     private var idlePlaceholder: some View {
-        PolishKit.EmptyStateView(
-            systemImage: "waveform.and.mic",
-            title: transcript == nil ? "Transcript not generated yet" : "Transcript is empty",
-            message: "Tap the refresh icon to transcribe this source on-device. The transcript helps the teleprompter show what to keep and what to cut.",
-            accent: AppPalette.accent,
-            actionTitle: nil,
-            action: nil
-        )
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Speech-to-text runs on-device.")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppPalette.primaryText)
+            Text("Tap the retranscribe icon above to generate a transcript from the source video's audio.")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AppPalette.secondaryText)
+        }
+        .padding(.vertical, 4)
     }
 
-    @ViewBuilder
     private var loadingPlaceholder: some View {
-        PolishKit.ShimmerText(
-            text: "Reading the audio on-device…",
-            systemImage: "waveform",
-            tint: AppPalette.accent
-        )
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 22)
+        HStack(spacing: 10) {
+            ProgressView().tint(AppPalette.accent)
+            Text("Transcribing on-device audio…")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppPalette.primaryText)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
     }
 
     private func errorPlaceholder(message: String) -> some View {
-        PolishKit.EmptyStateView(
-            systemImage: "exclamationmark.triangle.fill",
-            title: "Transcription failed",
-            message: message,
-            accent: AppPalette.danger
-        )
+        VStack(alignment: .center, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title.weight(.black))
+                .foregroundStyle(AppPalette.danger)
+                .padding(20)
+                .background(AppPalette.danger.opacity(0.15), in: Circle())
+            Text("Transcription failed")
+                .font(.headline.weight(.black))
+                .foregroundStyle(AppPalette.primaryText)
+            Text(message.isEmpty ? "No speech detected" : message)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppPalette.secondaryText)
+                .multilineTextAlignment(.center)
+            Button {
+                onRetranscribe()
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+                    .font(.subheadline.weight(.black))
+                    .foregroundStyle(AppPalette.background)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(AppPalette.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
     }
 
-// MARK: - Word classification helpers
+    // MARK: - State plumbing
+
+    /// TranscriptState is defined in `Transcript.swift` (top-level)
+    /// and re-exported via this view's `state:` parameter — both
+    /// the view model and this view share the same type.
+
+    private struct ExportShareContext: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
 
     enum TranscriptExportFormat { case srt, vtt }
-}
 
-private struct ExportShareContext: Identifiable {
-    let id = UUID()
-    let url: URL
-}
+    private struct DetectedSilence: Identifiable {
+        let id: String
+        let beforeSegmentID: UUID
+        let startSeconds: Double
+        let endSeconds: Double
 
-
-// MARK: - Word classification helpers
-
-private extension TranscriptWord {
-    func isKept(_ ranges: [ClipRange]) -> Bool {
-        ranges.contains { range in
-            let mid = (startSeconds + endSeconds) / 2
-            return mid >= range.startSeconds && mid <= range.endSeconds
+        var duration: Double {
+            max(0, endSeconds - startSeconds)
         }
     }
+}
 
-    func isCut(_ ranges: [ClipRange]) -> Bool {
-        !isKept(ranges)
-    }
+private extension TranscriptWord {
+    var displayText: String { text }
 }
 
 private extension TranscriptSegment {
-    func fullyKept(plannedRanges: [ClipRange]) -> Bool {
-        plannedRanges.contains { range in
-            range.startSeconds <= startSeconds && range.endSeconds >= endSeconds
-        }
-    }
-
-    func fullyCut(plannedRanges: [ClipRange]) -> Bool {
-        guard !plannedRanges.isEmpty else { return false }
-        let mid = (startSeconds + endSeconds) / 2
-        return !plannedRanges.contains { range in
-            mid >= range.startSeconds && mid <= range.endSeconds
-        }
-    }
+    var displayText: String { text }
 }
 
-// MARK: - Simple flow layout for words (SwiftUI Layout API)
+// MARK: - Word wrap (LazyHStack fallback)
 
-private struct FlowLayout: Layout {
-    var spacing: CGFloat
-    var lineSpacing: CGFloat
+/// Minimal horizontal flex layout that wraps word chips onto a new
+/// line when they overflow. Replaces the custom Swift `Layout`
+/// `FlowLayout` that was removed during the iOS 26.5 stack-overflow
+/// fix. Words are short, so the O(n) wrap is fast enough.
+struct FlowLayoutHStack<Content: View>: View {
+    let content: () -> Content
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        let lines = layoutLines(in: maxWidth, subviews: subviews)
-        let height = lines.reduce(0) { $0 + $1.height } + CGFloat(max(0, lines.count - 1)) * lineSpacing
-        let widest = lines.map(\.width).max() ?? 0
-        return CGSize(width: min(widest, maxWidth), height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let lines = layoutLines(in: bounds.width, subviews: subviews)
-        var y = bounds.minY
-        for line in lines {
-            var x = bounds.minX
-            for sub in line.items {
-                let size = sub.sizeThatFits(.unspecified)
-                sub.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-                x += size.width + spacing
-            }
-            y += line.height + lineSpacing
+    var body: some View {
+        HStack(alignment: .top, spacing: 4) {
+            content()
         }
-    }
-
-    private struct Line {
-        var items: [LayoutSubview] = []
-        var width: CGFloat = 0
-        var height: CGFloat = 0
-    }
-
-    private func layoutLines(in maxWidth: CGFloat, subviews: Subviews) -> [Line] {
-        var lines: [Line] = [Line()]
-        for sub in subviews {
-            let size = sub.sizeThatFits(.unspecified)
-            var current = lines[lines.count - 1]
-            let projected = current.width + (current.items.isEmpty ? 0 : spacing) + size.width
-            if projected > maxWidth, !current.items.isEmpty {
-                lines.append(Line())
-                current = lines[lines.count - 1]
-            }
-            current.items.append(sub)
-            current.width += (current.items.count == 1 ? 0 : spacing) + size.width
-            current.height = max(current.height, size.height)
-            lines[lines.count - 1] = current
-        }
-        return lines
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

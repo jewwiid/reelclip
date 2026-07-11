@@ -36,11 +36,9 @@ struct TranscriptService {
             throw TranscriptServiceError.recognizerUnavailable
         }
         guard recognizer.supportsOnDeviceRecognition else {
-            // If the user's locale doesn't have an on-device model, fall back to
-            // a server request. SFSpeechRecognizer will return an error if the
-            // device is offline, which we surface to the user.
-            try await ensureAuthorization()
-            return try await runRecognition(recognizer: recognizer, fileURL: audioFileURL, forceOnDevice: false)
+            // Never fall back to server speech recognition. ReelClip's
+            // privacy promise is that imported footage stays on-device.
+            throw TranscriptServiceError.recognizerUnavailable
         }
 
         try await ensureAuthorization()

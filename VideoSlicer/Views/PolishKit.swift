@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import UIKit
 
@@ -37,6 +38,19 @@ enum PolishKit {
     // pressFeedback is implemented as a View extension below for proper
     // generic resolution at the use-site.
 
+
+    /// Activate movie playback audio before any inline clip preview starts.
+    /// Thumbnail loops must opt into the same audio route as the main player.
+    @MainActor
+    static func configureVideoPlaybackAudio() {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true, options: [])
+        } catch {
+            // Playback remains usable without audio if the route is unavailable.
+        }
+    }
 
     // MARK: - Haptics
 
@@ -153,6 +167,15 @@ enum PolishKit {
         var accent: Color = AppPalette.accent
         var actionTitle: String?
         var action: (() -> Void)?
+        /// When set, the entire card becomes a single tap target —
+        /// "tap anywhere to do X" — and gains the same press feedback
+        /// as the optional action button. Coexists with `actionTitle`:
+        /// if both are set, the button still fires for taps on the
+        /// button itself, and the card-level handler fires for taps
+        /// on the rest of the card. Used by HomeView's empty states
+        /// so the "no project yet" cards route straight into the
+        /// matching import flow without needing a separate button.
+        var onTap: (() -> Void)?
 
         var body: some View {
             VStack(spacing: 14) {
@@ -199,6 +222,30 @@ enum PolishKit {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(AppPalette.hairline, lineWidth: 1)
             }
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .modifier(EmptyStateTapModifier(onTap: onTap))
+        }
+    }
+
+    /// Card-level tap handler for `EmptyStateView`. Kept as a private
+    /// modifier so the public `onTap` parameter is `(() -> Void)?` —
+    /// callers don't need to know the modifier exists. Disabled
+    /// when `onTap` is nil so we don't add an empty `.onTapGesture`
+    /// that would still intercept touches and break the optional
+    /// `action` button's hit-testing.
+    private struct EmptyStateTapModifier: ViewModifier {
+        let onTap: (() -> Void)?
+        func body(content: Content) -> some View {
+            if let onTap {
+                content
+                    .onTapGesture {
+                        onTap()
+                        PolishKit.Haptics.tap(.light).play()
+                    }
+                    .modifier(PolishKit.PressFeedbackModifier(scale: 0.98, pressedOpacity: 0.9))
+            } else {
+                content
+            }
         }
     }
 }
@@ -219,3 +266,14 @@ extension View {
         self
     }
 }
+
+// MARK: - FlowLayout removed (build 75, then fully dropped in v2.0)
+// Was a custom `Layout` (iOS 16+ SwiftUI Layout protocol) used by
+// FlexibleChipRow. Replaced with LazyVGrid above. Custom `Layout`
+// implementations trigger Swift runtime metadata corruption on
+// iOS 26.5 when nested inside VStack body evaluation, so we drop
+// the protocol entirely. In v2.0 the chip row itself was removed
+// along with the cut-page "Default clip settings" summary card
+// (now lives only in Settings), so the helper struct + chip
+// component below have no callers — kept the trailing comment
+// block as a tombstone.

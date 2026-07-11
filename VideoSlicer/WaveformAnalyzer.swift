@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-struct WaveformSample: Identifiable, Equatable {
+struct WaveformSample: Identifiable, Equatable, Codable {
     let id: Int
     let startSeconds: Double
     let endSeconds: Double

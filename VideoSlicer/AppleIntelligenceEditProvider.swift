@@ -19,26 +19,35 @@ struct AppleIntelligenceEditProvider: AIEditProvider {
         features: TimelineFeaturePack,
         credential: String?
     ) async throws -> [ClipRange] {
-        // Build the user message — feature pack is already compact JSON.
+        let compactFeatures = features.compactForLanguageModel()
+
+        // Build the user message from a bounded feature pack. Apple
+        // Intelligence is text-only, so raw video frames are omitted.
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let featureJSON = String(
-            data: (try? encoder.encode(features)) ?? Data(),
+            data: (try? encoder.encode(compactFeatures)) ?? Data(),
             encoding: .utf8
         ) ?? "{}"
+        let boundedPrompt = String(prompt.prefix(2_000))
 
         let instructions = """
         You plan short-form creator edits for Reels and TikTok. Use only the \
         supplied timeline features. Do not invent media outside the source \
         duration. Prefer energetic pacing, avoid duplicate ranges, and keep \
-        clips inside the source duration.
+        clips inside the source duration. If selectionRanges is non-empty, \
+        every returned clip must be fully contained inside one of those ranges. \
+        Never select outside the user's highlighted or curated ranges. The \
+        feature pack may contain sampled summaries rather than every source \
+        point; return a small, useful set of clips rather than exhausting \
+        the requested maximum.
         """
 
         let session = LanguageModelSession(instructions: instructions)
         let response = try await session.respond(
             to: """
             User request:
-            \(prompt)
+            \(boundedPrompt)
 
             Timeline feature pack:
             \(featureJSON)

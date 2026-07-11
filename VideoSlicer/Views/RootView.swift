@@ -10,19 +10,19 @@ struct RootView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            HomeView(selectedTab: $selectedTab)
+            AnyView(HomeView(selectedTab: $selectedTab))
                 .tabItem {
                     Label("Home", systemImage: "house.fill")
                 }
                 .tag(AppTab.home)
 
-            ClipView(selectedTab: $selectedTab)
+            AnyView(ClipView(selectedTab: $selectedTab))
                 .tabItem {
                     Label("Clip", systemImage: "scissors")
                 }
                 .tag(AppTab.clip)
 
-            SettingsView()
+            AnyView(SettingsView())
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")
                 }

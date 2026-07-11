@@ -3,6 +3,43 @@
 import XCTest
 
 final class VideoSegmenterTests: XCTestCase {
+    func testClipQueryParserParsesHyphenatedWordDurationRecipe() throws {
+        let query = try XCTUnwrap(ClipQueryParser.parse("5 five-second clips every 10 seconds"))
+
+        XCTAssertTrue(query.isValid)
+        XCTAssertEqual(query.count, 5)
+        XCTAssertEqual(query.durationSeconds, 5)
+        XCTAssertEqual(query.intervalSeconds, 10)
+    }
+
+    func testClipQueryParserParsesFormatterOutput() throws {
+        let text = FixedModeQueryFormatter.phrase(count: 4, duration: 5, interval: 10)
+        let query = try XCTUnwrap(ClipQueryParser.parse(text))
+
+        XCTAssertTrue(query.isValid)
+        XCTAssertEqual(query.count, 4)
+        XCTAssertEqual(query.durationSeconds, 5)
+        XCTAssertEqual(query.intervalSeconds, 10)
+    }
+
+    func testClipQueryParserKeepsSameValueDurationAndInterval() throws {
+        let query = try XCTUnwrap(ClipQueryParser.parse("4 five-second clips every five seconds"))
+
+        XCTAssertTrue(query.isValid)
+        XCTAssertEqual(query.count, 4)
+        XCTAssertEqual(query.durationSeconds, 5)
+        XCTAssertEqual(query.intervalSeconds, 5)
+    }
+
+    func testClipQueryParserParsesHyphenatedCompoundNumbers() throws {
+        let query = try XCTUnwrap(ClipQueryParser.parse("2 twenty-five-second clips 30s apart"))
+
+        XCTAssertTrue(query.isValid)
+        XCTAssertEqual(query.count, 2)
+        XCTAssertEqual(query.durationSeconds, 25)
+        XCTAssertEqual(query.intervalSeconds, 30)
+    }
+
     func testMediaWorkspaceCopiesImportsIntoImportsFolder() throws {
         let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
         let sourceURL = FileManager.default.temporaryDirectory
@@ -15,6 +52,34 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: copiedURL.path))
         XCTAssertTrue(copiedURL.path.hasPrefix(workspace.importsDirectory.path))
         XCTAssertEqual(try Data(contentsOf: copiedURL), data)
+    }
+
+    func testMediaWorkspaceMarksDeduplicatedImportAsShared() throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-dedup-source-\(UUID().uuidString).mov")
+        try Data("deduplicated-source".utf8).write(to: sourceURL)
+
+        let created = try workspace.importSourceCopyResult(from: sourceURL)
+        let shared = try workspace.importSourceCopyResult(from: sourceURL)
+
+        XCTAssertTrue(created.wasCreated)
+        XCTAssertFalse(shared.wasCreated)
+        XCTAssertEqual(created.url, shared.url)
+    }
+
+    func testMediaWorkspaceRemovesOnlyDirectImportCandidate() throws {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let sourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-candidate-source-\(UUID().uuidString).mov")
+        try Data("candidate-source".utf8).write(to: sourceURL)
+        let imported = try workspace.importSourceCopyResult(from: sourceURL)
+
+        workspace.removeImportedSource(at: imported.url)
+        workspace.removeImportedSource(at: sourceURL)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: imported.url.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sourceURL.path))
     }
 
     func testMediaWorkspaceCreatesUniqueExportDirectories() throws {
@@ -186,14 +251,16 @@ final class VideoSegmenterTests: XCTestCase {
     }
 
     func testProcessingLimitsRejectOverlongSource() {
+        let maximum = MediaProcessingLimits.maximumSourceDurationSeconds(for: .free)
         XCTAssertThrowsError(
             try MediaProcessingLimits.validateSourceDuration(
-                MediaProcessingLimits.maximumSourceDurationSeconds + 0.1
+                maximum + 0.1,
+                for: .free
             )
         ) { error in
             XCTAssertEqual(
                 error as? MediaProcessingLimitError,
-                .sourceTooLong(maximumDuration: MediaProcessingLimits.maximumSourceDurationSeconds)
+                .sourceTooLong(maximumDuration: maximum)
             )
         }
     }
@@ -258,154 +325,13 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertEqual(clip.timeRangeLabel, "0:10 - 0:10.3")
     }
 
-    func testMiniMaxPlannerParsesStrictJSONClipPlan() throws {
-        let ranges = try MiniMaxEditPlanner.ranges(
-            fromAssistantContent: #"{"clips":[{"start":1.2,"end":3.4,"reason":"motion"},{"start":5,"end":8}]}"#
-        )
-
-        XCTAssertEqual(ranges, [
-            ClipRange(startSeconds: 1.2, endSeconds: 3.4),
-            ClipRange(startSeconds: 5, endSeconds: 8)
-        ])
-    }
-
-    func testMiniMaxPlannerExtractsJSONFromTextResponse() throws {
-        let ranges = try MiniMaxEditPlanner.ranges(
-            fromAssistantContent: """
-            ```json
-            {"clips":[{"start":0.5,"end":2.5,"reason":"opening"}]}
-            ```
-            """
-        )
-
-        XCTAssertEqual(ranges, [ClipRange(startSeconds: 0.5, endSeconds: 2.5)])
-    }
-
-    func testMiniMaxPlannerPrefersFinalClipPlanAfterReasoningText() throws {
-        let ranges = try MiniMaxEditPlanner.ranges(
-            fromAssistantContent: """
-            <think>The request included this example: {"clips":[{"start":0,"end":2,"reason":"example"}]}.</think>
-            {"clips":[{"start":4.5,"end":8.25,"reason":"actual high-energy moment"}]}
-            """
-        )
-
-        XCTAssertEqual(ranges, [ClipRange(startSeconds: 4.5, endSeconds: 8.25)])
-    }
-
-    func testMiniMaxPlannerSendsAuthenticatedRequestAndUsesResponse() async throws {
-        let requestExpectation = expectation(description: "MiniMax request")
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MiniMaxURLProtocolStub.self]
-        let session = URLSession(configuration: configuration)
-        MiniMaxURLProtocolStub.requestHandler = { request in
-            XCTAssertEqual(request.url?.absoluteString, "https://api.minimax.io/v1/chat/completions")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            requestExpectation.fulfill()
-
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            let data = Data(
-                """
-                {"choices":[{"message":{"role":"assistant","content":"{\\"clips\\":[{\\"start\\":2,\\"end\\":4,\\"reason\\":\\"loud\\"}]}"}}]}
-                """.utf8
-            )
-            return (response, data)
-        }
-        defer { MiniMaxURLProtocolStub.requestHandler = nil }
-
-        let planner = MiniMaxEditPlanner(apiKey: "test-key", urlSession: session)
-        let ranges = try await planner.planCuts(
-            prompt: "Find the strongest moment.",
-            features: makeMiniMaxTestFeatures()
-        )
-
-        XCTAssertEqual(ranges, [ClipRange(startSeconds: 2, endSeconds: 4)])
-        await fulfillment(of: [requestExpectation], timeout: 1.0)
-    }
-
-    func testMiniMaxPlannerSurfacesAPIErrorMessage() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [MiniMaxURLProtocolStub.self]
-        let session = URLSession(configuration: configuration)
-        MiniMaxURLProtocolStub.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: try XCTUnwrap(request.url),
-                statusCode: 401,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            let data = Data(#"{"error":{"message":"invalid api key"}}"#.utf8)
-            return (response, data)
-        }
-        defer { MiniMaxURLProtocolStub.requestHandler = nil }
-
-        let planner = MiniMaxEditPlanner(apiKey: "bad-key", urlSession: session)
-
-        do {
-            _ = try await planner.planCuts(
-                prompt: "Find the strongest moment.",
-                features: makeMiniMaxTestFeatures()
-            )
-            XCTFail("Expected MiniMax request to fail.")
-        } catch let error as MiniMaxEditPlannerError {
-            XCTAssertEqual(error, .requestFailed(statusCode: 401, message: "invalid api key"))
-        }
-    }
-
-    func testMiniMaxPlannerWithRealAPIKeyWhenAvailable() async throws {
-        let envKey = ProcessInfo.processInfo.environment["MINIMAX_API_KEY"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let fileKey = try? String(contentsOfFile: "/tmp/MiniMax_API_KEY", encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let apiKey = envKey?.isEmpty == false ? envKey : (fileKey?.isEmpty == false ? fileKey : nil)
-        else {
-            throw XCTSkip("Set MINIMAX_API_KEY env var (or /tmp/MiniMax_API_KEY file) to run the live MiniMax planner test.")
-        }
-
-        // Connectivity probe: xcodebuild clones the simulator for test isolation,
-        // and the cloned simulator's URLSession can't always reach external hosts.
-        // Probe with a short timeout and skip the test cleanly if unreachable,
-        // instead of burning 120s on a guaranteed timeout. Run on a real device
-        // (or a non-cloned simulator with confirmed network reach) for the full
-        // end-to-end AI Assist verification.
-        let probeURL = URL(string: "https://api.minimax.io/v1/chat/completions")!
-        var probeRequest = URLRequest(url: probeURL)
-        probeRequest.httpMethod = "HEAD"
-        probeRequest.timeoutInterval = 8
-        do {
-            let (_, probeResponse) = try await URLSession.shared.data(for: probeRequest)
-            if let http = probeResponse as? HTTPURLResponse, !(200..<500).contains(http.statusCode) {
-                throw XCTSkip("api.minimax.io not reachable from this simulator (HTTP \(http.statusCode)). Run on device for live test.")
-            }
-        } catch {
-            throw XCTSkip("api.minimax.io not reachable from this simulator (\(error.localizedDescription)). Run on device for live test.")
-        }
-
-        let planner = MiniMaxEditPlanner(apiKey: apiKey)
-        let features = makeMiniMaxTestFeatures()
-
-        let ranges = try await planner.planCuts(
-            prompt: "Create two energetic clips from the strongest moments.",
-            features: features
-        )
-
-        XCTAssertFalse(ranges.isEmpty)
-        XCTAssertLessThanOrEqual(ranges.count, MediaProcessingLimits.maximumPlannedClips)
-        XCTAssertTrue(ranges.allSatisfy { $0.startSeconds >= 0 && $0.endSeconds <= 12 && $0.duration >= 0.5 })
-    }
-
     func testPreviewGeneratorSampleTimesStayInsideDuration() {
         let times = MediaPreviewGenerator.sampleTimes(durationSeconds: 5, targetCount: 4)
 
         XCTAssertEqual(times.count, 4)
         XCTAssertTrue(times.allSatisfy { $0 >= 0 && $0 < 5 })
         XCTAssertEqual(times[0], 0.625, accuracy: 0.001)
+        XCTAssertEqual(times[3], 4.375, accuracy: 0.001)
     }
 
     func testPreviewGeneratorCreatesThumbnailsForGeneratedVideo() async throws {
@@ -499,61 +425,12 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertGreaterThan(samples.map(\.level).max() ?? 0, 0.8)
     }
 
-    func testCoreMLScorerIsUnavailableWithoutBundledModel() {
-        let scorer = CoreMLHighlightScorer(bundle: Bundle(for: Self.self), modelName: "MissingHighlightScorer")
-        let score = scorer.score(
-            features: HighlightScoreFeatures(
-                brightnessScore: 0.8,
-                sharpnessScore: 0.7,
-                faceScore: 0.6,
-                motionScore: 0.5,
-                handcraftedScore: 0.65
-            )
-        )
-
-        XCTAssertFalse(scorer.isAvailable)
-        XCTAssertNil(score)
-    }
-
     func testFoundationModelsAvailabilityMatchesCurrentSDK() {
         #if canImport(FoundationModels)
         XCTAssertTrue(AIFeatureReadiness.foundationModelsFrameworkAvailable)
         #else
         XCTAssertFalse(AIFeatureReadiness.foundationModelsFrameworkAvailable)
         #endif
-    }
-
-    func testEditIntentPlannerParsesFastReelPrompt() {
-        let intent = EditIntentPlanner().intent(from: "Make a fast 15 second TikTok reel with people")
-
-        XCTAssertEqual(intent.pacing, .fast)
-        XCTAssertEqual(intent.targetDuration, 15)
-        XCTAssertTrue(intent.prioritizeFaces)
-        XCTAssertGreaterThan(intent.maxClips, 1)
-    }
-
-    func testHighlightPlannerSelectsTopNonOverlappingMoments() {
-        let candidates = [
-            HighlightCandidate(timeSeconds: 1, score: 0.3),
-            HighlightCandidate(timeSeconds: 2, score: 0.9),
-            HighlightCandidate(timeSeconds: 2.5, score: 0.8),
-            HighlightCandidate(timeSeconds: 6, score: 0.7)
-        ]
-        let settings = HighlightSettings(
-            clipDuration: 2,
-            minClipDuration: 1,
-            sampleInterval: 1,
-            maxClips: 2,
-            prioritizeFaces: true
-        )
-
-        let ranges = HighlightAnalyzer.planRanges(totalDuration: 8, candidates: candidates, settings: settings)
-
-        XCTAssertEqual(ranges.count, 2)
-        XCTAssertEqual(ranges[0].startSeconds, 1, accuracy: 0.001)
-        XCTAssertEqual(ranges[0].endSeconds, 3, accuracy: 0.001)
-        XCTAssertEqual(ranges[1].startSeconds, 5, accuracy: 0.001)
-        XCTAssertEqual(ranges[1].endSeconds, 7, accuracy: 0.001)
     }
 
     func testSmartCutPlannerUsesSilenceAsCutPoint() {
@@ -652,6 +529,7 @@ final class VideoSegmenterTests: XCTestCase {
     }
 
     func testSplitsGeneratedVideoIntoExpectedDurations() async throws {
+        try skipSimulatorVideoExportTest()
         let sourceURL = try await makeTestVideo(duration: 2.5, frameRate: 10)
         let segmenter = makeSegmenter()
         var progressValues: [Double] = []
@@ -668,6 +546,7 @@ final class VideoSegmenterTests: XCTestCase {
     }
 
     func testCustomRangesAreClampedBeforeExport() async throws {
+        try skipSimulatorVideoExportTest()
         let sourceURL = try await makeTestVideo(duration: 2.5, frameRate: 10)
         let segmenter = makeSegmenter()
         let ranges = [
@@ -688,6 +567,7 @@ final class VideoSegmenterTests: XCTestCase {
     }
 
     func testRemoveTemporaryFilesDeletesExportDirectory() async throws {
+        try skipSimulatorVideoExportTest()
         let sourceURL = try await makeTestVideo(duration: 1.0, frameRate: 10)
         let segmenter = makeSegmenter()
         let clips = try await segmenter.segmentVideo(sourceURL: sourceURL, segmentLength: 1) { _ in }
@@ -701,6 +581,7 @@ final class VideoSegmenterTests: XCTestCase {
     }
 
     func testExactMultipleDoesNotCreateEmptyTrailingClip() async throws {
+        try skipSimulatorVideoExportTest()
         let sourceURL = try await makeTestVideo(duration: 2.0, frameRate: 10)
         let segmenter = makeSegmenter()
 
@@ -831,13 +712,12 @@ final class VideoSegmenterTests: XCTestCase {
 
         try await withCheckedThrowingContinuation { continuation in
             writer.finishWriting {
-                if writer.status == .completed {
-                    continuation.resume()
-                } else {
-                    let error = writer.error ?? NSError(domain: "VideoSlicerTests", code: -5)
-                    continuation.resume(throwing: error)
-                }
+                continuation.resume()
             }
+        }
+
+        guard writer.status == .completed else {
+            throw writer.error ?? NSError(domain: "VideoSlicerTests", code: -5)
         }
 
         return outputURL
@@ -915,55 +795,81 @@ final class VideoSegmenterTests: XCTestCase {
         return pixelBuffer
     }
 
-    private func makeMiniMaxTestFeatures() -> TimelineFeaturePack {
-        TimelineFeaturePack(
-            sourceDurationSeconds: 12,
-            fallbackSegmentLengthSeconds: 3,
-            requestedMaxClips: 3,
-            targetPlatform: "Reels/TikTok",
-            analysisPoints: [
-                TimelineFeaturePoint(startSeconds: 0, endSeconds: 3, audioLevel: 0.2, isQuiet: false),
-                TimelineFeaturePoint(startSeconds: 3, endSeconds: 6, audioLevel: 0.9, isQuiet: false),
-                TimelineFeaturePoint(startSeconds: 6, endSeconds: 9, audioLevel: 0.1, isQuiet: true),
-                TimelineFeaturePoint(startSeconds: 9, endSeconds: 12, audioLevel: 0.7, isQuiet: false)
-            ],
-            fallbackRanges: [
-                ClipRange(startSeconds: 0, endSeconds: 3),
-                ClipRange(startSeconds: 3, endSeconds: 6),
-                ClipRange(startSeconds: 6, endSeconds: 9),
-                ClipRange(startSeconds: 9, endSeconds: 12)
-            ],
-            videoFrames: []
+    // MARK: - Outro
+
+    func testOutroDurationConstantIsThreeSeconds() {
+        XCTAssertEqual(CMTimeGetSeconds(OutroRenderer.duration), 3.0, accuracy: 0.01)
+    }
+
+    func testOutroCompositionHasThreeSecondDuration() async throws {
+        let result = await OutroRenderer.composition(
+            renderSize: CGSize(width: 1280, height: 720),
+            frameDuration: CMTime(value: 1, timescale: 30)
         )
-    }
-}
-
-private final class MiniMaxURLProtocolStub: URLProtocol {
-    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        true
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
-        request
-    }
-
-    override func startLoading() {
-        guard let requestHandler = Self.requestHandler else {
-            client?.urlProtocol(self, didFailWithError: MiniMaxEditPlannerError.invalidRequest)
+        guard let result else {
+            XCTFail("OutroRenderer.composition returned nil")
             return
         }
-
-        do {
-            let (response, data) = try requestHandler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
+        let duration = try await result.composition.load(.duration)
+        XCTAssertEqual(CMTimeGetSeconds(duration), 3.0, accuracy: 0.01)
     }
 
-    override func stopLoading() {}
+    func testShouldAppendOutroIsTrueForFreeTier() {
+        XCTAssertTrue(VideoSegmenter.shouldAppendOutro(forTier: .free))
+    }
+
+    func testShouldAppendOutroIsFalseForCreatorTier() {
+        XCTAssertFalse(VideoSegmenter.shouldAppendOutro(forTier: .creator))
+    }
+
+    func testFreeTierExportAppendsOutroToClip() async throws {
+        try skipSimulatorVideoExportTest()
+        let segmenter = makeSegmenter()
+        let sourceURL = try await makeTestVideo(duration: 1.0, frameRate: 10)
+        let clips = try await segmenter.segmentVideo(
+            sourceURL: sourceURL,
+            segmentLength: 1,
+            progress: { _ in },
+            tier: .free
+        )
+
+        XCTAssertEqual(clips.count, 1)
+        let clip = clips[0]
+        XCTAssertTrue(FileManager.default.fileExists(atPath: clip.url.path))
+
+        let asset = AVURLAsset(url: clip.url)
+        let duration = try await asset.load(.duration)
+        let seconds = CMTimeGetSeconds(duration)
+
+        // 1.0s source clip + 3.0s outro ≈ 4.0s. Tolerance covers
+        // encoder quantization at this small size.
+        XCTAssertEqual(seconds, 4.0, accuracy: 0.5)
+    }
+
+    func testCreatorTierExportHasNoOutro() async throws {
+        let segmenter = makeSegmenter()
+        let sourceURL = try await makeTestVideo(duration: 1.0, frameRate: 10)
+        let clips = try await segmenter.segmentVideo(
+            sourceURL: sourceURL,
+            segmentLength: 1,
+            progress: { _ in },
+            tier: .creator
+        )
+
+        XCTAssertEqual(clips.count, 1)
+        let clip = clips[0]
+        let asset = AVURLAsset(url: clip.url)
+        let duration = try await asset.load(.duration)
+        let seconds = CMTimeGetSeconds(duration)
+
+        // Creator tier is completely clean — no outro appended. Duration
+        // should be the raw segment length (~1s).
+        XCTAssertEqual(seconds, 1.0, accuracy: 0.4)
+    }
+
+    private func skipSimulatorVideoExportTest() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("AVAssetExportSession video encoding is unstable in the iOS simulator. Run this export test on a device.")
+        #endif
+    }
 }

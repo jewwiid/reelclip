@@ -67,7 +67,7 @@ struct Transcript: Codable, Equatable {
     var wordCount: Int { segments.reduce(0) { $0 + $1.words.count } }
 }
 
-// MARK: - Subtitle exports (Studio feature)
+// MARK: - Subtitle exports (Creator feature since v2.0)
 
 extension Transcript {
     /// Format the transcript as SubRip (`.srt`). Each segment maps to one cue;

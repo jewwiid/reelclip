@@ -1,15 +1,21 @@
 import Foundation
 
-/// Factory for instantiating the correct `AIEditProvider` based on the
-/// user's selection. Centralised so `SettingsView` and `VideoSplitterViewModel`
-/// agree on the same selection logic.
+/// Factory for the on-device `AIEditProvider`.
+///
+/// As of the v72 180, ReelClip is strictly Apple-native — only
+/// Apple Intelligence (Foundation Models) is supported. The
+/// registry now resolves a single provider; the
+/// `minimax:` parameter and `resolvedProvider(…)` fallback chain
+/// are retained as protocol surfaces so future on-device
+/// runtimes (Core ML, custom model files) can slot in without
+/// churn at every call site.
 enum AIProviderRegistry {
-    /// Returns the provider implementation for the given selection. Apple
-    /// Intelligence is unavailable on pre-iOS 26 devices — the call site
-    /// should fall back to another provider or surface a friendly error.
+    /// Returns the provider implementation for the given selection.
+    /// Apple Intelligence is unavailable on pre-iOS 26 devices —
+    /// the call site should surface a friendly "Apple Intelligence
+    /// required" error or prompt the user to update.
     static func provider(
-        for selection: AIProvider,
-        minimax: MiniMaxEditProvider = MiniMaxEditProvider(planner: MiniMaxEditPlanner(apiKey: ""))
+        for selection: AIProvider
     ) -> AIEditProvider? {
         switch selection {
         case .appleIntelligence:
@@ -19,39 +25,19 @@ enum AIProviderRegistry {
             }
             #endif
             return nil
-        case .minimax:
-            return minimax
-        case .claude:
-            return ClaudeEditProvider()
-        case .openai:
-            return OpenAIEditProvider.openAI()
-        case .gemini:
-            return GeminiEditProvider()
-        case .ollama:
-            return OpenAIEditProvider.ollama()
         }
     }
 
-    /// Resolves the provider for a user's selection, with a smart fallback
-    /// when the requested one is unavailable (e.g. Apple Intelligence on
-    /// an unsupported device). Returns `nil` if no provider can be
-    /// resolved — the caller should surface a friendly error instead of
-    /// crashing.
+    /// Resolves the provider for a user's selection. Returns `nil`
+    /// if the on-device runtime is unavailable (pre-iOS 26 device
+    /// or Apple Intelligence not enabled in Settings). Callers
+    /// should surface a friendly "requires iPhone 15 Pro or later"
+    /// error in that case.
     static func resolvedProvider(
-        for selection: AIProvider,
-        minimax: MiniMaxEditProvider
+        for selection: AIProvider
     ) -> (provider: AIEditProvider, didFallback: Bool, fallbackFrom: AIProvider?)? {
-        if let p = provider(for: selection, minimax: minimax) {
+        if let p = provider(for: selection) {
             return (p, false, nil)
-        }
-        // Apple Intelligence on an unsupported device → fall back to MiniMax
-        // (or whatever the user has a key for).
-        if selection == .appleIntelligence, let p = provider(for: .minimax, minimax: minimax) {
-            return (p, true, .appleIntelligence)
-        }
-        // Last resort: MiniMax
-        if let p = provider(for: .minimax, minimax: minimax) {
-            return (p, true, selection)
         }
         return nil
     }

@@ -1,4 +1,9 @@
-# ReelClip Paywall Design — Pricing Strategy & StoreKit 2 Wiring
+# ReelClip Paywall Design - Historical Pricing Strategy and StoreKit 2 Wiring
+
+> Historical proposal. The current app is Apple-only and local-first. The
+> cloud AI providers, BYOK credential flow, and server entitlement mirror
+> described below are not part of the shipped target. See
+> `docs/research-roadmap.md` for the current architecture and deferred work.
 
 _Date: 2026-07-06. Author: Mavis. Status: proposal (waiting on user sign-off)._
 
@@ -46,13 +51,13 @@ A heavy user doing ~50 AI plans/month through MiniMax-M3 costs us **~$0.10/mo**.
 
 ## 3. Three-tier proposal
 
-| Tier | Monthly | **Annual** (40% off) | What changes |
-|------|--------:|---------------------:|--------------|
-| **Free** | $0 | — | SmartPause, Highlight (CoreML), on-device STT transcript, Fixed-mode batch cut, **3 AI plans/month** under our pooled MiniMax route, **standard quality** export with small watermark, source ≤ 5 min |
-| **Creator** | **$9.99** | **$59.99/yr (~$5/mo)** | Unlimited AI plans · unlimited text-recipe refinement · **Apple Intelligence path** unlocked · 4K export · no watermark · all five BYOK providers usable without watermark interference · source ≤ 15 min |
-| **Studio** | **$19.99** | **$119.99/yr (~$10/mo)** | All Creator + **priority render queue** · **TikTok direct share** · Team library · bulk export (zip) · source ≤ 30 min · transcript export (SRT/VTT) · custom brand kit |
+| Tier | Weekly | Monthly | Annual | Lifetime | What changes |
+|------|-------:|--------:|-------:|---------:|--------------|
+| **Free** | $0 | $0 | — | — | SmartPause, Highlight (CoreML), on-device STT transcript, Fixed-mode batch cut, **3 AI plans/month** under our pooled MiniMax route, **standard quality** export with small watermark, source ≤ 5 min |
+| **Creator** | **$2.99/wk** | **$9.99/mo** | **$59.99/yr (~$5/mo)** | **$149.99 one-time** | Unlimited AI plans · unlimited text-recipe refinement · **Apple Intelligence path** unlocked · 4K export · no watermark · all five BYOK providers usable without watermark interference · source ≤ 15 min |
+| **Studio** | **$4.99/wk** | **$19.99/mo** | **$119.99/yr (~$10/mo)** | **$249.99 one-time** | All Creator + **priority render queue** · **TikTok direct share** · Team library · bulk export (zip) · source ≤ 30 min · transcript export (SRT/VTT) · custom brand kit |
 
-> Why these numbers: Creator at $9.99 hits the Sweet-Spot median ($9.99 Captions Pro / $12 VEED Lite / $15 Opus Starter). Studio at $19.99 stays under the "pro-tools" threshold ($24.99 VEED Pro / $29 Opus Pro / $39 Submagic Pro) but is meaningfully more powerful than Creator so we have a real upsell path. Annual discount 40% (in line with OpusClip's 35–50%).
+> Why these numbers: Creator at $9.99/mo hits the Sweet-Spot median ($9.99 Captions Pro / $12 VEED Lite / $15 Opus Starter). Studio at $19.99/mo stays under the "pro-tools" threshold ($24.99 VEED Pro / $29 Opus Pro / $39 Submagic Pro) but is meaningfully more powerful than Creator so we have a real upsell path. Weekly gives a low-commitment entry point, annual gives the discount anchor, and lifetime captures users who reject subscriptions.
 
 ### What each tier maps to in the current code
 
@@ -61,7 +66,7 @@ A heavy user doing ~50 AI plans/month through MiniMax-M3 costs us **~$0.10/mo**.
 | `SmartCutAnalyzer` (SmartPause mode) | ✅ | ✅ | ✅ |
 | `HighlightAnalyzer` + `CoreMLHighlightScorer` (Highlight mode) | ✅ | ✅ | ✅ |
 | On-device STT (`TranscriptService`) | ✅ | ✅ | ✅ |
-| Fixed-mode batch cut + number/spacing query (`ClipQuery`) | ✅ (3/day cap) | ✅ | ✅ |
+| Fixed-mode batch cut + number/spacing query (`ClipQuery`) | ✅ | ✅ | ✅ |
 | `AppleIntelligenceEditProvider` (Apple's free compute) | 🔒 | ✅ | ✅ |
 | `AIProviderRegistry.resolvedProvider` with our pooled MiniMax route | 🔒 (3/mo) | ✅ | ✅ |
 | BYOK providers (`Claude`, `OpenAI`, `Gemini`, `MiniMax`, `Ollama`) | ✅ (no watermark) | ✅ | ✅ |
@@ -91,7 +96,7 @@ The paywall never appears inside the actual editing flow — only on the action 
 
 ## 5. Implementation: StoreKit 2
 
-Use Apple's **StoreKit 2 SwiftUI views** (`SubscriptionStoreView` / `StoreView`) since they're WCAG-correct, support intro offers, family sharing, refund handling, and review-screenshot policy without us writing UI for them. Wire a `SubscriptionStore` `@MainActor ObservableObject` that:
+Use Apple's **StoreKit 2** `Product` and `Transaction` APIs with our custom SwiftUI paywall. Prices and trial state must come from StoreKit product data (`displayPrice`, subscription metadata), never from hardcoded purchase buttons. Wire a `SubscriptionStore` `@MainActor ObservableObject` that:
 
 - Loads products for our group ID via `Product.products(for:)`
 - Tracks entitlements via `Transaction.currentEntitlements`
@@ -104,16 +109,20 @@ Then make every paywall-gated view read `subscription.tier` and either render or
 
 ### Pricing products (App Store Connect) — exact configuration
 
-Group: `reelclip.subscription` (auto-renewing)
+Group: `reelclip.subscription` (auto-renewing weekly/monthly/yearly products)
 
-| Product ID | Period | Tier | Monthly equiv. |
-|-----------|--------|------|---------------:|
-| `rc.creator.monthly` | 1 month | Creator | $9.99 |
-| `rc.creator.yearly` | 1 year | Creator | $4.999/mo (effective) |
-| `rc.studio.monthly` | 1 month | Studio | $19.99 |
-| `rc.studio.yearly` | 1 year | Studio | $9.999/mo (effective) |
+| Product ID | Product type | Period | Tier | Price |
+|-----------|--------------|--------|------|------:|
+| `rc.creator.weekly` | Auto-renewable subscription | 1 week | Creator | $2.99 |
+| `rc.creator.monthly` | Auto-renewable subscription | 1 month | Creator | $9.99 |
+| `rc.creator.yearly` | Auto-renewable subscription | 1 year | Creator | $59.99 |
+| `rc.creator.lifetime2` | Non-consumable | Lifetime | Creator | $149.99 |
+| `rc.studio.weekly` | Auto-renewable subscription | 1 week | Studio | $4.99 |
+| `rc.studio.monthly` | Auto-renewable subscription | 1 month | Studio | $19.99 |
+| `rc.studio.yearly` | Auto-renewable subscription | 1 year | Studio | $119.99 |
+| `rc.studio.lifetime2` | Non-consumable | Lifetime | Studio | $249.99 |
 
-Plus an intro offer on the monthly Creator product: **3-day free trial**, then $9.99 — captures the price-sensitive user without permanently flattening revenue.
+Plus an intro offer on the monthly Creator product: **3-day free trial**, then $9.99 — captures the price-sensitive user without permanently flattening revenue. Lifetime products must be non-consumables, not non-renewing subscriptions, because the user owns the tier forever.
 
 > Note on Apple's 30% cut: at $9.99/mo Creator, Apple takes ~$3.00 first year, $1.50 thereafter. AI COGS = ~$0.10–1.00. **Net margin per Creator is ~$7.00 first year, ~$8.50 thereafter.** Annual lock-ins materially improve LTV because Apple drops to 15% after Year 1.
 
@@ -128,15 +137,17 @@ import StoreKit
 @MainActor
 final class SubscriptionStore: ObservableObject {
     enum Tier: String, Codable { case free, creator, studio }
-    enum Period: String { case monthly, yearly }
+    enum Period: String { case weekly, monthly, yearly, lifetime }
 
     @Published private(set) var tier: Tier = .free
     @Published private(set) var products: [Product] = []
     @Published private(set) var isLoading = false
 
     static let productIDs: Set<String> = [
-        "rc.creator.monthly", "rc.creator.yearly",
-        "rc.studio.monthly",  "rc.studio.yearly",
+        "rc.creator.weekly", "rc.creator.monthly",
+        "rc.creator.yearly", "rc.creator.lifetime2",
+        "rc.studio.weekly", "rc.studio.monthly",
+        "rc.studio.yearly", "rc.studio.lifetime2",
     ]
     static let groupID = "reelclip.subscription"
 
@@ -171,8 +182,10 @@ final class SubscriptionStore: ObservableObject {
         for await entitlement in Transaction.currentEntitlements {
             guard case .verified(let txn) = entitlement else { continue }
             switch txn.productID {
-            case "rc.studio.monthly", "rc.studio.yearly": best = .studio; break
-            case "rc.creator.monthly", "rc.creator.yearly": if best == .free { best = .creator }
+            case "rc.studio.weekly", "rc.studio.monthly", "rc.studio.yearly", "rc.studio.lifetime2":
+                best = .studio
+            case "rc.creator.weekly", "rc.creator.monthly", "rc.creator.yearly", "rc.creator.lifetime2":
+                if best == .free { best = .creator }
             default: continue
             }
         }
@@ -251,17 +264,17 @@ aiAssistButton
 
 ## 7. Open questions for you
 
-1. **Annual discount** — propose 40%. OpusClip does ~50%, Captions does ~30%. 40% feels right but lmk if you want different.
-2. **3-day free trial** — yes/no? Industry standard and Apple pushes it as a "good citizen" pattern.
+1. **Annual discount** — current StoreKit config is ~50% off monthly on Creator and Studio annual.
+2. **3-day free trial** — enabled on `rc.creator.monthly`.
 3. **Source duration limits** — 5/15/30 min on Free/Creator/Studio feels right for vertical-video creators. Raise if your target is podcasters.
 4. **iPhone-only or iPad?** StoreKit 2 Family Sharing and Picker sync — I'll enable both.
-5. **Server-side entitlement check?** For now: client-only via StoreKit 2 (transaction signed by Apple, no backend needed). Can add App Store Server Notifications later when we wire a Convex web hook for fraud signal.
+5. **Server-side entitlement check?** Intentionally not used. ReelClip resolves verified StoreKit entitlements locally and does not mirror purchase data to a ReelClip backend.
 
 Once you greenlight, I'll:
 
 1. Add `SubscriptionStore.swift` + `PaywallView.swift` + `EntitlementGate.swift`
 2. Wire `EntitlementGate` into the 5 spots in `ClipView`, `HomeView`, and `SettingsView`
 3. Add IAP capability to the Xcode project (`Signing & Capabilities` → `In-App Purchase`)
-4. Create `rc.creator.monthly/yearly` and `rc.studio.monthly/yearly` in App Store Connect under `app.reelclip.ios` (id `6787742864`)
+4. Create the weekly/monthly/yearly auto-renewable products plus lifetime non-consumables in App Store Connect under `app.reelclip.ios` (id `6787742864`)
 5. Add a `reelclip.subscription.storekit` configuration file for offline testing
 6. TestFlight v20 with the paywall, intro-trial enabled in App Store Connect sandbox

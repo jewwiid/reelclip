@@ -6,6 +6,8 @@ import PhotosUI
 
 struct PickedVideo: Transferable {
     let url: URL
+    let sourceName: String
+    let isWorkspaceCopyNew: Bool
     /// The PHAsset localIdentifier, if the picker item came from
     /// the Photos library. Used to persist the source reference in
     /// `.reelclip` project files so the recipient can resolve the
@@ -17,9 +19,11 @@ struct PickedVideo: Transferable {
         FileRepresentation(contentType: .movie) { video in
             SentTransferredFile(video.url)
         } importing: { received in
-            let copiedURL = try MediaWorkspace().importSourceCopy(from: received.file)
+            let imported = try MediaWorkspace().importSourceCopyResult(from: received.file)
             return PickedVideo(
-                url: copiedURL,
+                url: imported.url,
+                sourceName: received.file.lastPathComponent,
+                isWorkspaceCopyNew: imported.wasCreated,
                 photoLibraryLocalIdentifier: nil
             )
         }

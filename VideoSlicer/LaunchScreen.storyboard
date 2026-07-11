@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="23728" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES">
+    <device id="retina6_12" orientation="portrait" appearance="light"/>
+    <dependencies>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="23721"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <scenes>
+        <scene sceneID="launch-scene">
+            <objects>
+                <viewController id="launch-view-controller" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="launch-view">
+                        <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <stackView opaque="NO" contentMode="scaleToFill" axis="vertical" alignment="center" spacing="18" translatesAutoresizingMaskIntoConstraints="NO" id="brand-stack">
+                                <rect key="frame" x="117" y="321" width="168" height="232"/>
+                                <subviews>
+                                    <imageView opaque="NO" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="LogoMark" translatesAutoresizingMaskIntoConstraints="NO" id="brand-mark">
+                                        <rect key="frame" x="0.0" y="0.0" width="168" height="168"/>
+                                        <constraints>
+                                            <constraint firstAttribute="width" constant="168" id="mark-width"/>
+                                            <constraint firstAttribute="height" constant="168" id="mark-height"/>
+                                        </constraints>
+                                    </imageView>
+                                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Really clip with ReelClip" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignCenters" adjustsFontSizeToFit="YES" translatesAutoresizingMaskIntoConstraints="NO" id="brand-slogan">
+                                        <rect key="frame" x="0.0" y="186" width="168" height="28"/>
+                                        <constraints>
+                                            <constraint firstAttribute="height" constant="28" id="slogan-height"/>
+                                        </constraints>
+                                        <fontDescription type="system" weight="semibold" pointSize="18"/>
+                                        <color key="textColor" red="0.77" green="0.94" blue="0.20" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                                        <nil key="highlightedColor"/>
+                                    </label>
+                                </subviews>
+                            </stackView>
+                        </subviews>
+                        <viewLayoutGuide key="safeArea" id="launch-safe-area"/>
+                        <color key="backgroundColor" red="0.055" green="0.058" blue="0.066" alpha="1" colorSpace="custom" customColorSpace="sRGB"/>
+                        <constraints>
+                            <constraint firstItem="brand-stack" firstAttribute="centerX" secondItem="launch-view" secondAttribute="centerX" id="stack-center-x"/>
+                            <constraint firstItem="brand-stack" firstAttribute="centerY" secondItem="launch-view" secondAttribute="centerY" constant="-8" id="stack-center-y"/>
+                            <constraint firstItem="brand-stack" firstAttribute="leading" relation="greaterThanOrEqual" secondItem="launch-safe-area" secondAttribute="leading" constant="24" id="stack-leading"/>
+                            <constraint firstItem="brand-stack" firstAttribute="trailing" relation="lessThanOrEqual" secondItem="launch-safe-area" secondAttribute="trailing" constant="-24" id="stack-trailing"/>
+                        </constraints>
+                    </view>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="first-responder" userLabel="First Responder" sceneMemberID="firstResponder"/>
+            </objects>
+        </scene>
+    </scenes>
+    <resources>
+        <image name="LogoMark" width="834" height="1024"/>
+    </resources>
+</document>

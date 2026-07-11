@@ -4,6 +4,7 @@ enum TimelineZoom: String, CaseIterable, Identifiable {
     case fit = "Fit"
     case detail = "2x"
     case frame = "4x"
+    case ultra = "8x"
 
     var id: String { rawValue }
 
@@ -15,6 +16,8 @@ enum TimelineZoom: String, CaseIterable, Identifiable {
             return 1.45
         case .frame:
             return 2.0
+        case .ultra:
+            return 4.0
         }
     }
 }
@@ -57,7 +60,7 @@ enum ClipRangeEditor {
         }
 
         guard end - start >= 0.05 else { return range }
-        return ClipRange(startSeconds: start, endSeconds: end, reason: range.reason)
+        return ClipRange(startSeconds: start, endSeconds: end, reason: range.reason, isLocked: range.isLocked, cutMode: range.cutMode)
     }
 
     static func movedRanges(_ ranges: [ClipRange], from index: Int, direction: Int) -> [ClipRange] {

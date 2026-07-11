@@ -3,10 +3,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: VideoSplitterViewModel
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
-    @State private var selectedProvider: AIProvider = .appleIntelligence
-    @State private var keyDraft: String = ""
-    @State private var ollamaHost: String = "http://localhost:11434"
-    @State private var saveStatus: String?
     @State private var showPaywall: Bool = false
 
     var body: some View {
@@ -18,7 +14,14 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         settingsHeader
                         subscriptionCard
-                        aiProviderCard
+                        // AI runtime card — collapsed to a single
+                        // status row now that ReelClip is strictly
+                        // an iOS-Apple-native app. The previous
+                        // "AI Provider" picker (with API-key editors
+                        // for Claude, OpenAI, Gemini, MiniMax,
+                        // Ollama) is gone — there is no
+                        // bring-your-own-key path.
+                        aiRuntimeCard
                         clipDefaultsCard
                     }
                     .padding(18)
@@ -30,28 +33,27 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .tint(AppPalette.accent)
-        .onAppear {
-            selectedProvider = viewModel.selectedAIProvider
-            keyDraft = viewModel.credential(for: selectedProvider) ?? ""
-            if let host = viewModel.credential(for: .ollama), !host.isEmpty {
-                ollamaHost = host
-            }
-        }
     }
 
-    // MARK: - AI Provider
+    // MARK: - AI runtime
 
-    private var aiProviderCard: some View {
+    /// Single card explaining the on-device AI runtime. As of
+    /// the v72 180 there is exactly one AI runtime — Apple
+    /// Intelligence — so this card is informational rather than
+    /// configurable. The card shows the runtime name, a status
+    /// pill ("Ready" / "Unavailable"), and a one-line note about
+    /// the on-device guarantee.
+    private var aiRuntimeCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 11) {
-                Image(systemName: "brain")
+                Image(systemName: "apple.intelligence")
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(AppPalette.accent)
                     .frame(width: 32, height: 32)
                     .background(AppPalette.accent.opacity(0.12), in: Circle())
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("AI provider")
+                    Text("Apple Intelligence")
                         .font(.headline.weight(.bold))
                         .foregroundStyle(AppPalette.primaryText)
                     Text("Powers the AI Assist cut planner")
@@ -61,103 +63,32 @@ struct SettingsView: View {
 
                 Spacer(minLength: 0)
 
-                providerStatusPill
+                appleIntelligenceStatusPill
             }
 
-            ForEach(AIProvider.allCases) { provider in
-                providerRow(provider)
-            }
-
-            if selectedProvider.requiresAPIKey {
-                Divider().background(AppPalette.hairline)
-                providerKeyEditor
-            } else if selectedProvider == .ollama {
-                Divider().background(AppPalette.hairline)
-                ollamaEditor
-            }
+            Text("ReelClip is strictly an iOS-Apple-native app: every AI run starts and finishes on your device. No API key, no cloud round-trip, nothing leaves your phone. Requires iPhone 15 Pro or later with Apple Intelligence enabled in iOS Settings.")
+                .font(.caption)
+                .foregroundStyle(AppPalette.secondaryText)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .premiumSurface()
     }
 
-    private func providerRow(_ provider: AIProvider) -> some View {
-        let isSelected = selectedProvider == provider
-        let configured = viewModel.hasConfiguredCredential(for: provider)
-        let available = isProviderAvailable(provider)
-
-        return Button {
-            selectedProvider = provider
-            keyDraft = viewModel.credential(for: provider) ?? ""
-            viewModel.selectedAIProvider = provider
-            saveStatus = nil
-        } label: {
-            HStack(alignment: .top, spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(isSelected ? AppPalette.accent : AppPalette.controlSurface)
-                        .frame(width: 22, height: 22)
-                    if isSelected {
-                        Image(systemName: "checkmark")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(AppPalette.background)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(provider.displayName)
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(AppPalette.primaryText)
-                        if configured {
-                            statusPill("Ready", accent: AppPalette.accent)
-                        } else if provider.requiresAPIKey {
-                            statusPill("Needs key", accent: AppPalette.mutedText)
-                        } else if !available {
-                            statusPill("Unavailable", accent: AppPalette.mutedText)
-                        } else {
-                            statusPill("Free", accent: AppPalette.accent)
-                        }
-                    }
-                    Text(provider.blurb)
-                        .font(.caption)
-                        .foregroundStyle(AppPalette.secondaryText)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Spacer(minLength: 0)
-            }
-            .padding(12)
-            .background(
-                (isSelected ? AppPalette.accent.opacity(0.10) : AppPalette.controlSurface),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(
-                        isSelected ? AppPalette.accent : AppPalette.hairline,
-                        lineWidth: isSelected ? 1.5 : 1
-                    )
-            }
+    @ViewBuilder
+    private var appleIntelligenceStatusPill: some View {
+        if isAppleIntelligenceAvailable {
+            statusPill("Ready", accent: AppPalette.accent)
+        } else {
+            statusPill("Unavailable", accent: AppPalette.mutedText)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(provider.displayName) provider\(isSelected ? ", selected" : "")")
     }
 
-    private var providerStatusPill: some View {
-        let configured = viewModel.hasConfiguredCredential(for: selectedProvider)
-        let available = isProviderAvailable(selectedProvider)
-        let label: String
-        let accent: Color
-        if configured {
-            label = "Ready"; accent = AppPalette.accent
-        } else if selectedProvider.requiresAPIKey {
-            label = "Needs key"; accent = AppPalette.mutedText
-        } else if !available {
-            label = "Unavailable"; accent = AppPalette.mutedText
-        } else {
-            label = "Free"; accent = AppPalette.accent
-        }
-        return statusPill(label, accent: accent)
+    private var isAppleIntelligenceAvailable: Bool {
+        #if canImport(FoundationModels)
+        if #available(iOS 26, *) { return true }
+        #endif
+        return false
     }
 
     private func statusPill(_ text: String, accent: Color) -> some View {
@@ -169,247 +100,233 @@ struct SettingsView: View {
             .background(accent.opacity(0.85), in: Capsule())
     }
 
-    @ViewBuilder
-    private var providerKeyEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("API key")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-                Spacer()
-                if let url = selectedProvider.signupURL {
-                    Link(destination: url) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.up.right.square")
-                                .font(.caption2.weight(.bold))
-                            Text("Get \(selectedProvider.displayName) key")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .foregroundStyle(AppPalette.accent)
-                    }
-                }
-            }
-
-            SecureField(placeholderForSelected, text: $keyDraft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.subheadline.monospaced())
-                .foregroundStyle(AppPalette.primaryText)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 14)
-                .frame(height: 50)
-                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppPalette.hairline, lineWidth: 1)
-                }
-
-            HStack(spacing: 10) {
-                Button {
-                    saveKey()
-                } label: {
-                    Label("Save Key", systemImage: "key.fill")
-                        .font(.subheadline.weight(.bold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(trimmedKey.isEmpty ? AppPalette.mutedText : AppPalette.background)
-                .background(trimmedKey.isEmpty ? AppPalette.disabledSurface : AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .disabled(trimmedKey.isEmpty)
-
-                Button {
-                    try? viewModel.saveCredential("", for: selectedProvider)
-                    keyDraft = ""
-                    saveStatus = "Removed."
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.subheadline.weight(.bold))
-                        .frame(width: 48, height: 48)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(AppPalette.primaryText)
-                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .accessibilityLabel("Remove key")
-            }
-
-            if let saveStatus {
-                Text(saveStatus)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppPalette.accent)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var ollamaEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Ollama endpoint")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(AppPalette.secondaryText)
-
-            TextField("http://localhost:11434", text: $ollamaHost)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.subheadline.monospaced())
-                .foregroundStyle(AppPalette.primaryText)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 14)
-                .frame(height: 50)
-                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppPalette.hairline, lineWidth: 1)
-                }
-
-            Button {
-                let trimmed = ollamaHost.trimmingCharacters(in: .whitespacesAndNewlines)
-                try? viewModel.saveCredential(trimmed, for: .ollama)
-                saveStatus = "Saved."
-            } label: {
-                Label("Save Endpoint", systemImage: "network")
-                    .font(.subheadline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 48)
-                    .foregroundStyle(AppPalette.background)
-                    .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(ollamaHost.isEmpty)
-
-            Text("Make sure Ollama is running locally and you've pulled a model: `ollama pull llama3.2-vision`")
-                .font(.caption)
-                .foregroundStyle(AppPalette.mutedText)
-        }
-    }
-
-    private var placeholderForSelected: String {
-        switch selectedProvider {
-        case .minimax: return "Paste MiniMax API key"
-        case .claude: return "Paste Anthropic API key (sk-ant-…)"
-        case .openai: return "Paste OpenAI API key (sk-…)"
-        case .gemini: return "Paste Gemini API key"
-        case .ollama: return "Endpoint URL"
-        case .appleIntelligence: return ""
-        }
-    }
-
-    private var trimmedKey: String {
-        keyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func saveKey() {
-        do {
-            try viewModel.saveCredential(trimmedKey, for: selectedProvider)
-            saveStatus = "Saved."
-        } catch {
-            saveStatus = "Save failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func isProviderAvailable(_ provider: AIProvider) -> Bool {
-        switch provider {
-        case .appleIntelligence:
-            #if canImport(FoundationModels)
-            if #available(iOS 26, *) { return true }
-            #endif
-            return false
-        default:
-            return true
-        }
-    }
-
     // MARK: - Default clip settings
 
     private var clipDefaultsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 11) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(AppPalette.accent)
-                    .frame(width: 32, height: 32)
-                    .background(AppPalette.accent.opacity(0.12), in: Circle())
+        VStack(alignment: .leading, spacing: 16) {
+            defaultsHeader
+            defaultModeSelector
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Default clip settings")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(AppPalette.primaryText)
-                    Text("Applied to every new project")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppPalette.secondaryText)
-                }
+            Divider().background(AppPalette.hairline)
 
-                Spacer(minLength: 0)
-
-                defaultsStatusPill
+            // Mode-specific options — only the controls the
+            // selected default mode actually uses. Previously this
+            // rendered ALL default fields (Smart/AI length, Splice
+            // length, Fixed recipe, AI prompt) regardless of which
+            // default mode was chosen, so the user saw options
+            // that had no effect on their chosen mode. Mapping:
+            //   • Cut       → Fixed recipe (count/duration/space)
+            //   • Silence   → Smart/AI clip length
+            //   • Splice    → Splice clip length
+            //   • AI        → Smart/AI clip length + AI prompt
+            // Reset button stays visible in all modes so the user
+            // can clear saved defaults without re-picking a mode.
+            switch viewModel.defaultCutMode {
+            case .fixed:
+                fixedModeDefaults
+            case .smartPause:
+                silenceClipLengthField
+            case .highlight:
+                spliceClipLengthField
+            case .aiAssist:
+                aiClipLengthField
+                aiPromptDefaults
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Cut mode")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(AppPalette.secondaryText)
-
-                HStack(spacing: 8) {
-                    ForEach(CutMode.allCases) { mode in
-                        Button {
-                            viewModel.defaultCutMode = mode
-                        } label: {
-                            VStack(spacing: 6) {
-                                Image(systemName: mode.symbolName)
-                                    .font(.subheadline.weight(.bold))
-                                Text(mode.shortTitle)
-                                    .font(.caption.weight(.bold))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .foregroundStyle(viewModel.defaultCutMode == mode ? AppPalette.background : AppPalette.primaryText)
-                            .background(viewModel.defaultCutMode == mode ? AppPalette.accent : AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Default cut mode \(mode.shortTitle)")
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Default seconds per clip")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(AppPalette.secondaryText)
-                    Spacer()
-                    Text("\(viewModel.defaultSegmentLength)s")
-                        .font(.subheadline.monospacedDigit().weight(.bold))
-                        .foregroundStyle(AppPalette.primaryText)
-                }
-
-                Slider(
-                    value: Binding(
-                        get: { Double(viewModel.defaultSegmentLength) },
-                        set: { viewModel.defaultSegmentLength = Int($0.rounded()) }
-                    ),
-                    in: 5...120,
-                    step: 1
-                )
-                .tint(AppPalette.accent)
-            }
-
-            Button {
-                viewModel.resetClipDefaults()
-            } label: {
-                Label("Reset to defaults", systemImage: "arrow.counterclockwise")
-                    .font(.subheadline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .foregroundStyle(AppPalette.primaryText)
-                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(AppPalette.hairline, lineWidth: 1)
-                    }
-            }
-            .buttonStyle(.plain)
+            resetDefaultsButton
         }
         .premiumSurface()
+    }
+
+    /// "Silence clip length" duration selector. Owned by the
+    /// Smart Pause (Silence) recipe — independent of the AI
+    /// recipe so each can hold its own default.
+    private var silenceClipLengthField: some View {
+        RecipeDurationSelector(
+            title: "Silence clip length",
+            systemImage: "timer",
+            value: Binding(
+                get: { Double(viewModel.defaultSilenceClipDuration) },
+                set: { viewModel.setDefaultSilenceClipDuration(Int($0.rounded())) }
+            ),
+            range: 5...120,
+            detail: "Used by Smart Pause when a new project starts. Stored per-recipe so changing it doesn't affect other modes."
+        )
+    }
+
+    /// "AI clip length" duration selector. Owned by the AI
+    /// recipe — independent of the Silence recipe.
+    private var aiClipLengthField: some View {
+        RecipeDurationSelector(
+            title: "AI clip length",
+            systemImage: "timer",
+            value: Binding(
+                get: { Double(viewModel.defaultAiClipDuration) },
+                set: { viewModel.setDefaultAiClipDuration(Int($0.rounded())) }
+            ),
+            range: 5...120,
+            detail: "Used by Apple Intelligence when a new project starts. Stored per-recipe so changing it doesn't affect other modes."
+        )
+    }
+
+    /// "Splice clip length" duration selector. Single use — only
+    /// the Splice default mode needs the initial draggable-length
+    /// value.
+    private var spliceClipLengthField: some View {
+        RecipeDurationSelector(
+            title: "Splice clip length",
+            systemImage: "ruler",
+            value: Binding(
+                get: { Double(viewModel.defaultHighlightDuration) },
+                set: { viewModel.setDefaultHighlightDuration(Int($0.rounded())) }
+            ),
+            range: 1...120,
+            detail: "Initial draggable splice length."
+        )
+    }
+
+    private var defaultsHeader: some View {
+        HStack(spacing: 11) {
+            Image(systemName: "slider.horizontal.3")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppPalette.accent)
+                .frame(width: 32, height: 32)
+                .background(AppPalette.accent.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Default clip settings")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppPalette.primaryText)
+                Text("Applied to new projects and Reset Recipe")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.secondaryText)
+            }
+
+            Spacer(minLength: 0)
+
+            defaultsStatusPill
+        }
+    }
+
+    private var defaultModeSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Default mode")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppPalette.secondaryText)
+
+            HStack(spacing: 8) {
+                ForEach(CutMode.allCases) { mode in
+                    Button {
+                        viewModel.setDefaultCutMode(mode)
+                    } label: {
+                        VStack(spacing: 6) {
+                            Image(systemName: mode.symbolName)
+                                .font(.subheadline.weight(.bold))
+                            Text(mode.shortTitle)
+                                .font(.caption.weight(.bold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .foregroundStyle(viewModel.defaultCutMode == mode ? AppPalette.background : AppPalette.primaryText)
+                        .background(
+                            viewModel.defaultCutMode == mode ? AppPalette.accent : AppPalette.controlSurface,
+                            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Default cut mode \(mode.shortTitle)")
+                }
+            }
+        }
+    }
+
+    private var fixedModeDefaults: some View {
+        FixedRecipeEditor(
+            title: "Fixed recipe",
+            inputStyle: Binding(
+                get: { viewModel.defaultFixedModeInputStyle },
+                set: { viewModel.setDefaultFixedModeInputStyle($0) }
+            ),
+            queryDraft: Binding(
+                get: { viewModel.defaultFixedModeQueryDraft },
+                set: { viewModel.setDefaultFixedModeQueryDraft($0) }
+            ),
+            buttonCount: Binding(
+                get: { viewModel.defaultFixedModeButtonCount },
+                set: { viewModel.setDefaultFixedModeButtonCount($0) }
+            ),
+            buttonDuration: Binding(
+                get: { viewModel.defaultFixedModeButtonDuration },
+                set: { viewModel.setDefaultFixedModeButtonDuration($0) }
+            ),
+            buttonInterval: Binding(
+                get: { viewModel.defaultFixedModeButtonInterval },
+                set: { viewModel.setDefaultFixedModeButtonInterval($0) }
+            ),
+            durationRange: 1...120,
+            durationDetail: fixedButtonsSummary,
+            intervalDetail: fixedButtonsSummary
+        )
+    }
+
+    private var aiPromptDefaults: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            settingsLabel("AI edit intent", systemImage: "wand.and.stars")
+
+            TextField(
+                "Make a fast reel",
+                text: Binding(
+                    get: { viewModel.defaultEditPrompt },
+                    set: { viewModel.setDefaultEditPrompt($0) }
+                ),
+                axis: .vertical
+            )
+            .lineLimit(2...4)
+            .textInputAutocapitalization(.sentences)
+            .font(.subheadline)
+            .foregroundStyle(AppPalette.primaryText)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(AppPalette.hairline, lineWidth: 1)
+            }
+        }
+    }
+
+    private var resetDefaultsButton: some View {
+        Button {
+            viewModel.resetClipDefaults()
+        } label: {
+            Label("Reset to defaults", systemImage: "arrow.counterclockwise")
+                .font(.subheadline.weight(.bold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .foregroundStyle(AppPalette.primaryText)
+                .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(AppPalette.hairline, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func settingsLabel(_ title: String, systemImage: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppPalette.accent)
+                .frame(width: 20)
+            Text(title)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(AppPalette.secondaryText)
+        }
+    }
+
+    private var fixedButtonsSummary: String {
+        "\(viewModel.defaultFixedModeButtonCount) clip\(viewModel.defaultFixedModeButtonCount == 1 ? "" : "s") at \(viewModel.defaultFixedModeButtonDuration)s, every \(viewModel.defaultFixedModeButtonInterval)s"
     }
 
     private var defaultsStatusPill: some View {
@@ -422,25 +339,29 @@ struct SettingsView: View {
     }
 
     private var settingsHeader: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "lock.shield")
-                    .font(.system(size: 13, weight: .bold))
-                Text("Secure credentials")
-                    .font(.caption.weight(.semibold))
-                    .textCase(.uppercase)
-                    .tracking(1.1)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 12) {
+                AppBrandLockup(
+                    iconSize: 40,
+                    titleFont: .system(.title3, design: .rounded).weight(.black)
+                )
+
+                Spacer(minLength: 0)
             }
-            .foregroundStyle(AppPalette.accent)
 
-            Text("API Keys")
-                .font(.system(size: 34, weight: .black, design: .rounded))
-                .foregroundStyle(AppPalette.primaryText)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Settings")
+                    .font(.system(size: 30, weight: .black, design: .rounded))
+                    .foregroundStyle(AppPalette.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
 
-            Text("User-owned AI keys are saved in the iOS Keychain and kept on this device. Apple Intelligence runs on-device for free.")
-                .font(.subheadline)
-                .foregroundStyle(AppPalette.secondaryText)
-                .lineLimit(3)
+                Text("Manage AI providers, subscription status, and default cut settings.")
+                    .font(.subheadline)
+                    .foregroundStyle(AppPalette.secondaryText)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .premiumSurface()
     }
@@ -455,6 +376,43 @@ struct SettingsView: View {
     }
 
     // MARK: - Subscription
+
+    private var subscriptionPlanStatusTitle: String {
+        subscriptionStore.tier == .free ? "Current" : "Active"
+    }
+
+    private var subscriptionPlanSummary: String {
+        switch subscriptionStore.tier {
+        case .free:
+            return "Starter tools are active. Upgrade for AI planning, clean exports, and longer source clips."
+        case .creator:
+            return "Creator is active with unlimited AI planning, source-quality exports, 30-min sources, and SRT/VTT handoff."
+        }
+    }
+
+    private var subscriptionBenefitsTitle: String {
+        subscriptionStore.tier == .free ? "Creator unlocks" : "Included benefits"
+    }
+
+    private var subscriptionBenefitsPreview: [SettingsPlanBenefit] {
+        switch subscriptionStore.tier {
+        case .free:
+            return [
+                SettingsPlanBenefit(systemImage: "brain.head.profile", title: "AI clip planning", body: "Generate cut recipes without the free monthly cap."),
+                SettingsPlanBenefit(systemImage: "wand.and.stars", title: "Clean exports", body: "Remove the free-tier watermark at source quality."),
+                SettingsPlanBenefit(systemImage: "timer", title: "30-minute sources", body: "Work with longer raw clips in one project."),
+                SettingsPlanBenefit(systemImage: "square.stack.3d.up", title: "Multi-scene projects", body: "Stack scenes with separate source videos and export them as a batch.")
+            ]
+        case .creator:
+            return [
+                SettingsPlanBenefit(systemImage: "brain.head.profile", title: "Unlimited AI cuts", body: "Plan creator-ready clips without monthly AI limits."),
+                SettingsPlanBenefit(systemImage: "4k.tv", title: "Source-quality export", body: "Export clean clips without the free-tier watermark."),
+                SettingsPlanBenefit(systemImage: "timer", title: "30-minute sources", body: "Bring in longer footage without splitting first."),
+                SettingsPlanBenefit(systemImage: "square.stack.3d.up", title: "Multi-scene projects", body: "Add scenes, switch between them, batch-export the whole project."),
+                SettingsPlanBenefit(systemImage: "captions.bubble.fill", title: "SRT/VTT transcripts", body: "Export subtitle files for handoff.")
+            ]
+        }
+    }
 
     private var subscriptionCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -474,15 +432,36 @@ struct SettingsView: View {
                     .foregroundStyle(AppPalette.primaryText)
                 Spacer(minLength: 0)
                 settingsStatusPill(
-                    subscriptionStore.tier == .free ? "Free" : "Active",
+                    subscriptionPlanStatusTitle,
                     isActive: subscriptionStore.tier != .free
                 )
             }
 
-            Text(subscriptionStore.tier.tagline)
+            Text(subscriptionPlanSummary)
                 .font(.subheadline)
                 .foregroundStyle(AppPalette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(subscriptionBenefitsTitle)
+                    .font(.caption2.weight(.black))
+                    .foregroundStyle(AppPalette.mutedText)
+                    .textCase(.uppercase)
+                    .tracking(0.7)
+
+                VStack(spacing: 9) {
+                    ForEach(subscriptionBenefitsPreview) { benefit in
+                        planBenefitPreviewRow(benefit)
+                    }
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppPalette.raisedSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(AppPalette.hairline, lineWidth: 1)
+            }
 
             if subscriptionStore.tier == .free {
                 Button {
@@ -536,4 +515,36 @@ struct SettingsView: View {
                 .environmentObject(subscriptionStore)
         }
     }
+
+    private func planBenefitPreviewRow(_ benefit: SettingsPlanBenefit) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: benefit.systemImage)
+                .font(.caption.weight(.black))
+                .foregroundStyle(AppPalette.accent)
+                .frame(width: 24, height: 24)
+                .background(AppPalette.accent.opacity(0.12), in: Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(benefit.title)
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(AppPalette.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Text(benefit.body)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AppPalette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct SettingsPlanBenefit: Identifiable {
+    var id: String { title }
+    let systemImage: String
+    let title: String
+    let body: String
 }

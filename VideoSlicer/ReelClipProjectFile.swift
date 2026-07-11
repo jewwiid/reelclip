@@ -23,7 +23,7 @@ extension UTType {
 
 /// Top-level JSON envelope. Versioned so we can evolve the schema safely.
 struct ReelClipProjectEnvelope: Codable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     /// Schema version of `payload`. Bump when changing `ReelClipProjectFile`
     /// in a non-backward-compatible way; readers can refuse unknown versions
@@ -60,6 +60,13 @@ struct ReelClipProjectFile: Codable {
     var segmentLengthText: String
     var editPrompt: String
     var plannedRanges: [ClipRange]
+    /// Committed planned ranges. Optional on the wire so older
+    /// `.reelclip` files (pre-v2.0) decode cleanly — recipients
+    /// fall back to an empty array and the user can re-save in
+    /// the current build to populate it.
+    var savedClips: [ClipRange]?
+    var scenes: [MediaProjectScene]?
+    var activeSceneId: UUID?
     var exportedClips: [ReelClipStoredClip]
     var scrubPositionSeconds: Double
     var createdAt: Date
@@ -119,6 +126,9 @@ extension ReelClipProjectFile {
         self.segmentLengthText = project.segmentLengthText
         self.editPrompt = project.editPrompt
         self.plannedRanges = project.plannedRanges
+        self.savedClips = project.savedClips
+        self.scenes = project.scenes
+        self.activeSceneId = project.activeSceneId
         self.exportedClips = project.exportedClips.map(ReelClipStoredClip.init)
         self.scrubPositionSeconds = project.scrubPositionSeconds
         self.createdAt = project.createdAt
@@ -154,9 +164,13 @@ extension ReelClipProjectFile {
             segmentLengthText: segmentLengthText,
             editPrompt: editPrompt,
             plannedRanges: plannedRanges,
+            scenes: scenes,
+            activeSceneId: activeSceneId,
             exportedClips: exportedClips.map { $0.toStoredClip() },
+            savedClips: savedClips ?? [],
             scrubPositionSeconds: scrubPositionSeconds,
             transcript: nil,
+            sourcePhotoLibraryIdentifier: sourcePhotoLibraryIdentifier,
             createdAt: createdAt,
             updatedAt: updatedAt
         )

@@ -4,22 +4,25 @@ import Foundation
 /// resolution cap differ by subscription tier:
 ///
 /// - Free       :  5 min sources, 720p export, watermark applied
-/// - Creator    : 15 min sources, native resolution, no watermark
-/// - Studio     : 30 min sources, native resolution, no watermark
-///                   + priority render queue
-///                   + SRT/VTT transcript export
+/// - Creator    : 30 min sources, native resolution, no watermark
+///                 + SRT/VTT transcript export
+///                 + custom export quality (1080p / 60 fps)
+///                 + multi-scene projects
+///
+/// Studio was merged into Creator in v2.0 — its differentiators
+/// (30-min sources, SRT/VTT) are now Creator features.
 enum MediaProcessingLimits {
 
     // MARK: - Tier limits
 
     /// Maximum source video duration we accept, by tier. Free tier wants a
-    /// short bound so the user feels the gate; the longer tiers unlock the
-    /// use cases the user is paying for (podcast clips, webinar edits).
+    /// short bound so the user feels the gate; Creator unlocks the long
+    /// source use cases the user is paying for (podcast clips, webinar
+    /// edits).
     static func maximumSourceDurationSeconds(for tier: SubscriptionStore.Tier) -> Double {
         switch tier {
         case .free:    return 5.0 * 60.0
-        case .creator: return 15.0 * 60.0
-        case .studio:  return 30.0 * 60.0
+        case .creator: return 30.0 * 60.0
         }
     }
 
@@ -121,7 +124,7 @@ enum MediaProcessingLimitError: LocalizedError, Equatable {
         switch self {
         case .sourceTooLong(let maximumDuration):
             let label = MediaProcessingLimits.formatDuration(maximumDuration)
-            return "This video is longer than the \(label) limit for your plan. Upgrade to Creator (15m) or Studio (30m), or trim the source first."
+            return "This video is longer than the \(label) limit for your plan. Upgrade to Creator for longer sources, or trim the source first."
         case .tooManyPlannedClips(let count, let maximum):
             return "This plan would create \(count) clips. Increase the segment length or lower the requested clip count; the current safety limit is \(maximum) clips."
         }

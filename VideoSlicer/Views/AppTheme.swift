@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum AppPalette {
     static let background = Color(red: 0.055, green: 0.058, blue: 0.066)
@@ -17,6 +18,63 @@ enum AppPalette {
     static let timelineBlock = Color.white.opacity(0.14)
 }
 
+struct AppBrandLockup: View {
+    var subtitle: String? = nil
+    var iconSize: CGFloat = 40
+    var titleFont: Font = .system(.title3, design: .rounded).weight(.black)
+
+    // The wordmark ships as a transparent PNG with the r/e mark leading
+    // the type, so the whole brand is one image now. `iconSize` is reused
+    // as the wordmark height (with a small bump for visual weight against
+    // the old icon-in-square look) and `titleFont` now styles the subtitle
+    // — same call sites, repurposed meaning. Multiplier tuned: 1.3 (too
+    // tall) → 0.65 (too small) → 0.85 (current sweet spot per build 119
+    // feedback).
+    private var wordmarkHeight: CGFloat { iconSize * 0.85 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image("Wordmark")
+                .resizable()
+                .renderingMode(.original)
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+                .frame(height: wordmarkHeight)
+                .accessibilityHidden(true)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(titleFont)
+                    .foregroundStyle(AppPalette.accent)
+                    .textCase(.uppercase)
+                    .tracking(0.8)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(subtitle.map { "ReelClip, \($0)" } ?? "ReelClip")
+    }
+}
+
+struct AppBrandIcon: View {
+    let size: CGFloat
+
+    var body: some View {
+        // Standalone brand mark for placements that need a header chip
+        // without the full lockup (paywall, etc.). Uses the same
+        // wordmark as `AppBrandLockup` — `size` is the height, the
+        // width follows from the wordmark's natural ~3.5:1 aspect.
+        Image("Wordmark")
+            .resizable()
+            .renderingMode(.original)
+            .interpolation(.high)
+            .aspectRatio(contentMode: .fit)
+            .frame(height: size)
+            .accessibilityHidden(true)
+    }
+}
+
 extension CutMode {
     var symbolName: String {
         switch self {
@@ -25,7 +83,12 @@ extension CutMode {
         case .smartPause:
             return "waveform"
         case .highlight:
-            return "sparkles.tv"
+            // Splice = "join by cutting". `fork.knife` is the
+            // closest knife-shaped SF Symbol — there's no standalone
+            // `knife` glyph. `scissors` was considered but is already
+            // taken by Cut (`.fixed`), so this keeps the two cutting
+            // tools visually distinct in the mode picker.
+            return "fork.knife"
         case .aiAssist:
             return "brain.head.profile"
         }
@@ -34,11 +97,11 @@ extension CutMode {
     var shortTitle: String {
         switch self {
         case .fixed:
-            return "Fixed"
+            return "Cut"
         case .smartPause:
-            return "Pause"
+            return "Silence"
         case .highlight:
-            return "Highlight"
+            return "Splice"
         case .aiAssist:
             return "AI"
         }
@@ -46,14 +109,29 @@ extension CutMode {
 }
 
 extension View {
-    func premiumSurface() -> some View {
-        self
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(AppPalette.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(AppPalette.hairline, lineWidth: 1)
-            }
+    func premiumSurface() -> AnyView {
+        // `.clipped()` after the background + overlay so any
+        // child view that grows wider than the surface (long
+        // un-wrappable text, a TextField with very long input,
+        // a Picker that exceeds the frame width, etc.) is cut
+        // off at the rounded surface boundary instead of
+        // overflowing past the hairline border. Without this,
+        // toggling a collapsible section can "blow out" the
+        // surface — the bg + border stay at the original width
+        // but the children extend past the right edge, breaking
+        // the visual contract of the rounded card. We use the
+        // same corner radius for the clip shape so the cut
+        // matches the surface silhouette.
+        AnyView(
+            self
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(AppPalette.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(AppPalette.hairline, lineWidth: 1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        )
     }
 }
