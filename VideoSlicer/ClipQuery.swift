@@ -27,11 +27,15 @@ struct ClipQuery: Equatable {
     var detectedDuration: Bool { durationSeconds != nil }
     var detectedInterval: Bool { intervalSeconds != nil }
 
-    /// Cap the user's count by what's physically achievable inside the source.
-    /// A 30-second source can hold at most `ceil(sourceDuration / interval)`
-    /// evenly-spaced clips of duration `duration`. If the user asked for 100
-    /// clips on a 30s source with a 5s duration, this returns 6 — never a
-    /// silent surprise inside `ranges(forSourceDuration:)`.
+    /// Honour the user's count as the source of truth. If the source can't
+    /// fit the requested count at the current duration/interval, the
+    /// `ranges(forSourceDuration:)` walker scales the per-clip span down
+    /// to make the count fit, so the user always gets the count they
+    /// asked for (down to a 0.05s minimum clip length).
+    ///
+    /// When the user did NOT specify a count, returns the natural ceiling
+    /// — `min(ceil(source / duration), floor(source / interval))` — so
+    /// the planner can walk the source with the configured values.
     ///
     /// Returns 0 when the configuration is invalid (zero / negative duration
     /// or non-finite inputs).
@@ -41,15 +45,13 @@ struct ClipQuery: Equatable {
         guard interval > 0, interval.isFinite,
               sourceDuration.isFinite, sourceDuration > 0 else { return 0 }
 
-        let maximumsItCanEverFit = Int((sourceDuration / duration).rounded(.up))
-        let spacingCapped = interval > 0 ? Int((sourceDuration / interval).rounded(.down)) : maximumsItCanEverFit
-        let natural = max(0, min(maximumsItCanEverFit, spacingCapped))
         guard let requested = count else {
             // No user-supplied count — use the natural ceiling.
-            return natural
+            let maximumsItCanEverFit = Int((sourceDuration / duration).rounded(.up))
+            let spacingCapped = interval > 0 ? Int((sourceDuration / interval).rounded(.down)) : maximumsItCanEverFit
+            return max(0, min(maximumsItCanEverFit, spacingCapped))
         }
-        let requestedClamped = max(0, requested)
-        return min(requestedClamped, natural)
+        return max(0, requested)
     }
 
     /// Snapshot describing how the user's recipe will actually behave when run.
@@ -109,9 +111,11 @@ struct ClipQuery: Equatable {
     }
 
     /// Materialise the query into concrete cut ranges for a source of `sourceDuration` seconds.
-    /// When `count` is set, the loop terminates at the first clamp — never
-    /// producing more than the user asked for. When `count` is nil, the loop
-    /// walks the whole source via the `safetyCeiling` guard.
+    /// When `count` is set, the walker scales the per-clip span down to
+    /// `sourceDuration / count` so the user always gets exactly the count
+    /// they asked for (clips may be shorter than the configured duration).
+    /// When `count` is nil, the loop walks the whole source via the
+    /// `safetyCeiling` guard.
     func ranges(forSourceDuration sourceDuration: Double, safetyCeiling: Int = 999) -> [ClipRange] {
         guard isValid, let duration = durationSeconds else { return [] }
         let interval = max(duration, resolvedInterval)
@@ -119,15 +123,29 @@ struct ClipQuery: Equatable {
               sourceDuration.isFinite, sourceDuration > 0 else { return [] }
 
         let hardLimit = count.map { max(0, $0) } ?? safetyCeiling
+
+        // If the user specified a count, scale the per-clip span to fit.
+        // The "step" (position increment) and the clip "span" both shrink
+        // together so the requested count lands exactly inside the source.
+        let (span, step): (Double, Double)
+        if count != nil, hardLimit > 0 {
+            let perClip = sourceDuration / Double(hardLimit)
+            span = min(duration, perClip)
+            step = min(interval, perClip)
+        } else {
+            span = duration
+            step = interval
+        }
+
         var ranges: [ClipRange] = []
         var position = 0.0
         var iterations = 0
 
         while iterations < hardLimit {
-            let end = min(position + duration, sourceDuration)
+            let end = min(position + span, sourceDuration)
             if end - position < 0.05 { break }
             ranges.append(ClipRange(startSeconds: position, endSeconds: end))
-            position += interval
+            position += step
             iterations += 1
         }
 

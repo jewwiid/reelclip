@@ -146,10 +146,18 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// The explicit scope for an audio or Apple Intelligence pass. Curated
     /// ranges win over the live highlight draft; with neither present, the
     /// analyzer is intentionally allowed to inspect the full source.
+    ///
+    /// In silence/AI mode the highlight draft from Splice mode is NOT used
+    /// as the default scope — the user expects "the entire clip" to be the
+    /// default when they enter these modes. They can still narrow the scope
+    /// by adding planned ranges in the current mode.
     var selectedAnalysisRanges: [ClipRange] {
         let curated = plannedRangesForCurrentMode
         if !curated.isEmpty {
             return curated
+        }
+        if cutMode == .smartPause || cutMode == .aiAssist {
+            return []
         }
         if let highlightDraft {
             return [highlightDraft]
