@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject private var viewModel: VideoSplitterViewModel
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @State private var showPaywall: Bool = false
+    @State private var isFeedbackPresented = false
 
     var body: some View {
         NavigationStack {
@@ -30,6 +31,7 @@ struct SettingsView: View {
                         // bring-your-own-key path.
                         aiRuntimeCard
                         clipDefaultsCard
+                        feedbackCard
                     }
                     .padding(18)
                     .frame(maxWidth: 760)
@@ -41,6 +43,9 @@ struct SettingsView: View {
             }
         }
         .tint(AppPalette.accent)
+        .sheet(isPresented: $isFeedbackPresented) {
+            FeedbackSupportSheet()
+        }
     }
 
     // MARK: - AI runtime
@@ -106,6 +111,49 @@ struct SettingsView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(accent.opacity(0.85), in: Capsule())
+    }
+
+    private var feedbackCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 11) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppPalette.accent)
+                    .frame(width: 32, height: 32)
+                    .background(AppPalette.accent.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Feedback")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppPalette.primaryText)
+                    Text("Report a bug or request a feature")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Text("Send a note directly to the ReelClip team. Nothing is shared until you choose Send.")
+                .font(.caption)
+                .foregroundStyle(AppPalette.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                PolishKit.Haptics.tap(.light).play()
+                isFeedbackPresented = true
+            } label: {
+                Label("Send feedback", systemImage: "paperplane.fill")
+                    .font(.subheadline.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .foregroundStyle(AppPalette.background)
+                    .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .polishPressFeedback()
+        }
+        .premiumSurface()
     }
 
     // MARK: - Default clip settings

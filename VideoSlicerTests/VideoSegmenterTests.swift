@@ -40,6 +40,205 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertEqual(query.intervalSeconds, 30)
     }
 
+    func testAIEditIntentParsesExactCountAndDuration() {
+        let intent = AIEditIntentParser.parse(
+            prompt: "3 clips 20 seconds long",
+            fallbackDuration: 28
+        )
+
+        XCTAssertEqual(intent.requestedClipCount, 3)
+        XCTAssertEqual(intent.targetClipDurationSeconds, 20)
+        XCTAssertTrue(intent.requiresExactCount)
+        XCTAssertTrue(intent.requiresExactDuration)
+        XCTAssertEqual(intent.expectedTotalDuration, 60)
+        XCTAssertEqual(intent.summary, "3 clips · 20s each")
+    }
+
+    func testAIEditPlanResolverEnforcesExactCountDurationAndNoOverlap() throws {
+        let intent = AIEditIntentParser.parse(
+            prompt: "Create exactly 3 clips, 20 seconds long",
+            fallbackDuration: 28
+        )
+        let features = TimelineFeaturePack(
+            sourceDurationSeconds: 90,
+            fallbackSegmentLengthSeconds: 20,
+            requestedMaxClips: 3,
+            targetPlatform: "Reels/TikTok",
+            analysisPoints: [],
+            fallbackRanges: [],
+            videoFrames: [],
+            editIntent: intent
+        )
+        let candidates = [
+            ClipRange(startSeconds: 8, endSeconds: 13, reason: "Opening"),
+            ClipRange(startSeconds: 38, endSeconds: 44, reason: "Middle"),
+            ClipRange(startSeconds: 68, endSeconds: 74, reason: "Ending")
+        ]
+
+        let resolved = try AIEditPlanResolver.resolve(
+            candidates: candidates,
+            features: features
+        )
+
+        XCTAssertEqual(resolved.count, 3)
+        XCTAssertTrue(resolved.allSatisfy { abs($0.duration - 20) < 0.001 })
+        XCTAssertTrue(zip(resolved, resolved.dropFirst()).allSatisfy {
+            $0.endSeconds <= $1.startSeconds
+        })
+    }
+
+    func testAIEditPlanResolverRejectsImpossibleExactRequest() {
+        let intent = AIEditIntentParser.parse(
+            prompt: "3 clips 20 seconds long",
+            fallbackDuration: 28
+        )
+        let features = TimelineFeaturePack(
+            sourceDurationSeconds: 45,
+            fallbackSegmentLengthSeconds: 20,
+            requestedMaxClips: 3,
+            targetPlatform: "Reels/TikTok",
+            analysisPoints: [],
+            fallbackRanges: [],
+            videoFrames: [],
+            editIntent: intent
+        )
+
+        XCTAssertThrowsError(
+            try AIEditPlanResolver.resolve(candidates: [], features: features)
+        ) { error in
+            XCTAssertEqual(
+                error as? AIEditIntentError,
+                .insufficientSource(required: 60, available: 45)
+            )
+        }
+    }
+
+    func testAIEditPlanResolverScalesFallbackDurationForCountOnlyRequest() throws {
+        let intent = AIEditIntentParser.parse(
+            prompt: "Create 3 clips",
+            fallbackDuration: 28
+        )
+        let features = TimelineFeaturePack(
+            sourceDurationSeconds: 60,
+            fallbackSegmentLengthSeconds: 28,
+            requestedMaxClips: 3,
+            targetPlatform: "Reels/TikTok",
+            analysisPoints: [],
+            fallbackRanges: [],
+            videoFrames: [],
+            editIntent: intent
+        )
+
+        let resolved = try AIEditPlanResolver.resolve(
+            candidates: [],
+            features: features
+        )
+
+        XCTAssertEqual(resolved.count, 3)
+        XCTAssertTrue(resolved.allSatisfy { abs($0.duration - 20) < 0.001 })
+    }
+
+    func testCompactTimelineFeaturesPreserveAIEditIntent() {
+        let intent = AIEditIntentParser.parse(
+            prompt: "3 clips 20 seconds long",
+            fallbackDuration: 28
+        )
+        let snippets = (0..<40).map { index in
+            TimelineTranscriptSnippet(
+                startSeconds: Double(index),
+                endSeconds: Double(index + 1),
+                text: String(repeating: "spoken context ", count: 20)
+            )
+        }
+        let features = TimelineFeaturePack(
+            sourceDurationSeconds: 90,
+            fallbackSegmentLengthSeconds: 20,
+            requestedMaxClips: 3,
+            targetPlatform: "Reels/TikTok",
+            analysisPoints: [],
+            fallbackRanges: [],
+            videoFrames: [],
+            transcriptSnippets: snippets,
+            editIntent: intent
+        )
+
+        let compact = features.compactForLanguageModel()
+        XCTAssertEqual(compact.editIntent, intent)
+        XCTAssertEqual(compact.transcriptSnippets.count, 20)
+        XCTAssertTrue(compact.transcriptSnippets.allSatisfy { $0.text.count <= 160 })
+    }
+
+    @MainActor
+    func testAIEditPromptSynchronizesVisibleRecipeMetrics() {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let viewModel = VideoSplitterViewModel(mediaWorkspace: workspace)
+        viewModel.cutMode = .aiAssist
+        viewModel.durationSeconds = 90
+        viewModel.segmentLengthText = "28"
+
+        viewModel.updateAIEditPrompt("3 clips 20 seconds long")
+
+        XCTAssertEqual(viewModel.segmentLengthText, "20")
+        XCTAssertEqual(viewModel.expectedClipCountLabel, "3")
+        XCTAssertEqual(viewModel.durationLabel, "1:00")
+        XCTAssertEqual(viewModel.resolvedAIEditIntent.summary, "3 clips · 20s each")
+    }
+
+    func testFixedCountSurvivesFinalValidationWhenClipsMustScaleDown() throws {
+        let ranges = ClipQuery(
+            count: 12,
+            durationSeconds: 5,
+            intervalSeconds: 10
+        ).ranges(forSourceDuration: 6)
+
+        let validated = try MediaProcessingLimits.validatedClipPlan(
+            ranges,
+            totalDuration: 6,
+            frameDuration: 1.0 / 30.0,
+            minimumDuration: 0.05
+        )
+
+        XCTAssertEqual(validated.count, 12)
+    }
+
+    @MainActor
+    func testFixedRecipeUsesVisibleButtonCountWhenLegacyTextStyleIsRestored() {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let viewModel = VideoSplitterViewModel(mediaWorkspace: workspace)
+        viewModel.fixedModeInputStyle = .text
+        viewModel.fixedModeQueryDraft = "4 five-second clips every 10 seconds"
+        viewModel.fixedModeButtonCount = 12
+        viewModel.fixedModeButtonDuration = 5
+        viewModel.fixedModeButtonInterval = 10
+        viewModel.setFixedModeRandomDuration(false)
+        viewModel.setFixedModeRandomInterval(false)
+
+        let ranges = viewModel.fixedModeRanges(forSourceDuration: 120)
+
+        XCTAssertEqual(ranges.count, 12)
+        XCTAssertEqual(viewModel.expectedClipCount, nil)
+        viewModel.durationSeconds = 120
+        XCTAssertEqual(viewModel.expectedClipCount, 12)
+    }
+
+    @MainActor
+    func testSilenceAndAIDefaultToWholeSourceAfterPreviousPlansExist() {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let viewModel = VideoSplitterViewModel(mediaWorkspace: workspace)
+        viewModel.plannedRanges = [
+            ClipRange(startSeconds: 10, endSeconds: 20, cutMode: .smartPause),
+            ClipRange(startSeconds: 30, endSeconds: 40, cutMode: .aiAssist)
+        ]
+
+        viewModel.cutMode = .smartPause
+        XCTAssertTrue(viewModel.selectedAnalysisRanges.isEmpty)
+        XCTAssertEqual(viewModel.analysisScopeLabel, "Whole source")
+
+        viewModel.cutMode = .aiAssist
+        XCTAssertTrue(viewModel.selectedAnalysisRanges.isEmpty)
+        XCTAssertEqual(viewModel.analysisScopeLabel, "Whole source")
+    }
+
     func testMediaWorkspaceCopiesImportsIntoImportsFolder() throws {
         let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
         let sourceURL = FileManager.default.temporaryDirectory

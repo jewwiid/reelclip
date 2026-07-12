@@ -45,10 +45,10 @@ struct HomeView: View {
     @State private var isReelClipExporterPresented = false
     @State private var reelClipExportURL: URL?
     @State private var showPaywall: Bool = false
-    // Drives the "where should we import from?" chooser shown when
-    // the user taps an empty state that needs a source video
-    // (Photos or Files). Set to true by the empty-state tap
-    // handler, cleared by the confirmationDialog's dismiss.
+    // Drives the source chooser shown when the user taps an empty state.
+    // This is an app sheet rather than a confirmation dialog: the system
+    // dialog is placed beneath this screen's persistent TabView bar on iOS,
+    // obscuring its lower action.
     @State private var isSourceChooserPresented: Bool = false
     // Drives the PhotosPicker presented by the source chooser
     // dialog. Separate from `homePickerItem` (the toolbar's
@@ -148,38 +148,14 @@ struct HomeView: View {
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
-        .confirmationDialog(
-            "Pick a source",
-            isPresented: $isSourceChooserPresented,
-            titleVisibility: .visible
-        ) {
-            // Photos — uses the same `homePickerItem` binding the
-            // toolbar's "Media" button uses, so the picker UI and
-            // import flow are identical. The PhotosPicker is
-            // declared inline in the toolbar; tapping "Photos" here
-            // just toggles a separate PhotosPicker that we'll
-            // present via a fresh picker item.
-            Button("Photos") {
-                guard !viewModel.isImportingMedia, !isPreparingImport else { return }
-                // Use a dedicated picker item so we don't race with
-                // the toolbar's binding. Re-set the existing one —
-                // it already drives the import flow on `.onChange`.
-                homePickerItem = nil
-                // Schedule the picker presentation: the
-                // confirmationDialog dismissal animation must
-                // finish before the PhotosPicker sheet starts,
-                // otherwise iOS cancels one with the other. A
-                // microsecond DispatchQueue.main.async gives the
-                // dialog time to dismiss cleanly.
-                DispatchQueue.main.async {
-                    isHomePhotosPickerPresented = true
-                }
-            }
-            Button("Files") {
-                guard !viewModel.isImportingMedia, !isPreparingImport else { return }
-                isFileImporterPresented = true
-            }
-            Button("Cancel", role: .cancel) {}
+        .sheet(isPresented: $isSourceChooserPresented) {
+            SourceChooserSheet(
+                onPhotos: presentPhotosSourcePicker,
+                onFiles: presentFilesSourcePicker
+            )
+            .presentationDetents([.height(252)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(AppPalette.background)
         }
         .photosPicker(
             isPresented: $isHomePhotosPickerPresented,
@@ -187,6 +163,34 @@ struct HomeView: View {
             matching: .videos,
             photoLibrary: .shared()
         )
+    }
+
+    /// Dismiss the app-owned chooser before presenting another system picker.
+    /// Presenting the picker in the same transaction makes iOS drop one of the
+    /// two presentations, especially on a tab-root view.
+    private func presentPhotosSourcePicker() {
+        guard !viewModel.isImportingMedia, !isPreparingImport else { return }
+        isSourceChooserPresented = false
+        homePickerItem = nil
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard !isSourceChooserPresented,
+                  !viewModel.isImportingMedia,
+                  !isPreparingImport else { return }
+            isHomePhotosPickerPresented = true
+        }
+    }
+
+    private func presentFilesSourcePicker() {
+        guard !viewModel.isImportingMedia, !isPreparingImport else { return }
+        isSourceChooserPresented = false
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard !isSourceChooserPresented,
+                  !viewModel.isImportingMedia,
+                  !isPreparingImport else { return }
+            isFileImporterPresented = true
+        }
     }
 
     private var homeScroll: AnyView {
@@ -930,5 +934,98 @@ struct HomeView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(AppPalette.secondaryText)
         }
+    }
+}
+
+/// Source selection belongs above the app's tab bar. Keeping it in a small
+/// sheet gives both actions their own reliable touch target and avoids the
+/// system confirmation-dialog placement underneath the persistent navigation.
+private struct SourceChooserSheet: View {
+    let onPhotos: () -> Void
+    let onFiles: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Pick a source")
+                        .font(.title3.weight(.black))
+                        .foregroundStyle(AppPalette.primaryText)
+                    Text("Start a new ReelClip project")
+                        .font(.subheadline)
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
+
+                Spacer(minLength: 12)
+
+                Button(action: dismiss.callAsFunction) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.black))
+                        .foregroundStyle(AppPalette.primaryText)
+                        .frame(width: 32, height: 32)
+                        .background(AppPalette.controlSurface, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close source picker")
+            }
+
+            HStack(spacing: 12) {
+                sourceButton(
+                    title: "Photos",
+                    systemImage: "photo.on.rectangle",
+                    prominence: .accent,
+                    action: onPhotos
+                )
+                sourceButton(
+                    title: "Files",
+                    systemImage: "externaldrive",
+                    prominence: .secondary,
+                    action: onFiles
+                )
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 20)
+        .frame(maxWidth: 560, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(AppPalette.background)
+    }
+
+    private enum SourceButtonProminence {
+        case accent
+        case secondary
+    }
+
+    private func sourceButton(
+        title: String,
+        systemImage: String,
+        prominence: SourceButtonProminence,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isAccent = prominence == .accent
+        return Button(action: action) {
+            VStack(spacing: 9) {
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.bold))
+                Text(title)
+                    .font(.headline.weight(.bold))
+            }
+            .foregroundStyle(isAccent ? AppPalette.background : AppPalette.primaryText)
+            .frame(maxWidth: .infinity)
+            .frame(height: 94)
+            .background(
+                isAccent ? AppPalette.accent : AppPalette.controlSurface,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(isAccent ? Color.clear : AppPalette.hairline, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Import a source video from \(title)")
     }
 }

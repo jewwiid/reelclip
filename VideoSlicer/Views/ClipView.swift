@@ -3521,11 +3521,19 @@ struct ClipView: View {
     private func plannedClipFramePair(index: Int, range: ClipRange) -> some View {
         ZStack {
             HStack(spacing: 4) {
-                plannedClipFrameBadge(
-                    thumbnail: closestThumbnail(to: range.startSeconds)
+                PlannedClipEdgeThumbnail(
+                    sourceURL: viewModel.sourceURL,
+                    targetSeconds: range.startSeconds,
+                    durationSeconds: viewModel.durationSeconds ?? 0,
+                    frameDuration: viewModel.frameDurationSeconds,
+                    fallbackThumbnail: closestThumbnail(to: range.startSeconds)
                 )
-                plannedClipFrameBadge(
-                    thumbnail: closestThumbnail(to: outPreviewSeconds(for: range))
+                PlannedClipEdgeThumbnail(
+                    sourceURL: viewModel.sourceURL,
+                    targetSeconds: outPreviewSeconds(for: range),
+                    durationSeconds: viewModel.durationSeconds ?? 0,
+                    frameDuration: viewModel.frameDurationSeconds,
+                    fallbackThumbnail: closestThumbnail(to: outPreviewSeconds(for: range))
                 )
             }
             .opacity(loopingClipIndex == index ? 0 : 1)
@@ -3577,34 +3585,6 @@ struct ClipView: View {
         // every row in the list.
     }
 
-    private func plannedClipFrameBadge(thumbnail: MediaThumbnail?) -> some View {
-        // Just the thumbnail (or a film-icon placeholder when no frame
-        // is available yet). The IN/OUT + timecode overlay is gone — the
-        // user gets that info from the title + trim bar in the same row.
-        // ZStack wrapper so the two branches can have different modifier
-        // chains but a single unified return type.
-        ZStack {
-            if let thumbnail {
-                Image(uiImage: thumbnail.image)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 44, height: 58)
-                    .clipShape(Rectangle())
-            } else {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(AppPalette.mediaWell)
-                    .frame(width: 44, height: 58)
-                    .overlay {
-                        Image(systemName: "film")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(AppPalette.secondaryText)
-                    }
-            }
-        }
-        .frame(width: 44, height: 58)
-        .clipped()
-    }
-
     private func outPreviewSeconds(for range: ClipRange) -> Double {
         let frameDuration = viewModel.frameDurationSeconds.isFinite && viewModel.frameDurationSeconds > 0
             ? viewModel.frameDurationSeconds
@@ -3617,6 +3597,75 @@ struct ClipView: View {
     private func closestThumbnail(to seconds: Double) -> MediaThumbnail? {
         guard !viewModel.sourceThumbnails.isEmpty else { return nil }
         return viewModel.sourceThumbnails.min { abs($0.timeSeconds - seconds) < abs($1.timeSeconds - seconds) }
+    }
+
+    /// The planned-clip card needs a frame at the actual in/out boundary.
+    /// `sourceThumbnails` is deliberately sparse for the timeline filmstrip,
+    /// so it remains a responsive fallback while this view loads the exact
+    /// boundary frame. The task key changes per video frame and cancellation
+    /// prevents a stale drag request from replacing the latest image.
+    private struct PlannedClipEdgeThumbnail: View {
+        let sourceURL: URL?
+        let targetSeconds: Double
+        let durationSeconds: Double
+        let frameDuration: Double
+        let fallbackThumbnail: MediaThumbnail?
+
+        @State private var exactImage: UIImage?
+
+        private var safeFrameDuration: Double {
+            frameDuration.isFinite && frameDuration > 0 ? frameDuration : 1.0 / 30.0
+        }
+
+        private var targetFrameSeconds: Double {
+            let frameIndex = (targetSeconds / safeFrameDuration).rounded()
+            return max(frameIndex * safeFrameDuration, 0)
+        }
+
+        private var requestID: String {
+            "\(sourceURL?.standardizedFileURL.path ?? "missing")-\(Int((targetFrameSeconds * 600).rounded()))"
+        }
+
+        var body: some View {
+            ZStack {
+                if let exactImage {
+                    Image(uiImage: exactImage)
+                        .resizable()
+                        .scaledToFill()
+                } else if let fallbackThumbnail {
+                    Image(uiImage: fallbackThumbnail.image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "film")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
+            }
+            .frame(width: 44, height: 58)
+            .background(AppPalette.mediaWell)
+            .clipShape(Rectangle())
+            .task(id: requestID) {
+                exactImage = nil
+                // Edge drags issue many values per second. Let the handle
+                // settle briefly, then keep only the latest frame request.
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                guard !Task.isCancelled,
+                      let sourceURL
+                else {
+                    return
+                }
+
+                let image = await MediaPreviewGenerator().thumbnail(
+                    for: sourceURL,
+                    at: targetFrameSeconds,
+                    durationSeconds: durationSeconds,
+                    frameDuration: safeFrameDuration
+                )
+                guard !Task.isCancelled else { return }
+                exactImage = image
+            }
+        }
     }
 
     private var savedClipsSection: some View {

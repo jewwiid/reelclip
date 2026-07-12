@@ -78,6 +78,58 @@ struct MediaPreviewGenerator {
         return Self.replacingLeadingBlackThumbnails(thumbnails)
     }
 
+    /// Extract a frame for a precise timeline boundary. Timeline filmstrips
+    /// intentionally contain only a small number of samples, so they are not
+    /// accurate enough for an editable clip's in/out preview.
+    func thumbnail(
+        for sourceURL: URL,
+        at timeSeconds: Double,
+        durationSeconds: Double,
+        frameDuration: Double,
+        maximumSize: CGSize = CGSize(width: 160, height: 160)
+    ) async -> UIImage? {
+        guard FileManager.default.fileExists(atPath: sourceURL.path),
+              durationSeconds.isFinite,
+              durationSeconds > 0,
+              timeSeconds.isFinite
+        else {
+            return nil
+        }
+
+        let safeFrameDuration = frameDuration.isFinite && frameDuration > 0
+            ? frameDuration
+            : 1.0 / 30.0
+        let lastUsableTime = max(durationSeconds - safeFrameDuration, 0)
+        // Seeking exactly to t=0 can produce a decoder-only black image for
+        // some MOV/HEVC assets. The first displayable frame still represents
+        // the clip's start boundary while avoiding that transient frame.
+        let firstDisplayableTime = min(safeFrameDuration, lastUsableTime)
+        let clampedTime = min(
+            max(timeSeconds, firstDisplayableTime),
+            lastUsableTime
+        )
+
+        let asset = AVURLAsset(url: sourceURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = maximumSize
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = CMTime(
+            seconds: safeFrameDuration,
+            preferredTimescale: 600
+        )
+
+        do {
+            try Task.checkCancellation()
+            let target = CMTime(seconds: clampedTime, preferredTimescale: 600)
+            let (cgImage, _) = try await generator.image(at: target)
+            try Task.checkCancellation()
+            return UIImage(cgImage: cgImage)
+        } catch {
+            return nil
+        }
+    }
+
     /// Return one midpoint sample per timeline cell. The first sample is
     /// deliberately after t=0 so AVAssetImageGenerator does not hand the UI
     /// a decode-only black opening frame. The filmstrip still maps that image

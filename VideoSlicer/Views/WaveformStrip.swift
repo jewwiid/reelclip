@@ -68,7 +68,8 @@ struct WaveformStrip: View {
                     onUpdateRange: onUpdateRange,
                     onToggleLock: nil,
                     onEdgeDragPreview: nil,
-                    onScrub: onScrub
+                    onScrub: onScrub,
+                    onTapPosition: onTap
                 )
             }
         }
@@ -418,6 +419,10 @@ struct RangeInteractionView: View {
     /// edge handles above still control in/out, so the body
     /// gesture is free to do something more useful.
     let onScrub: ((Double) -> Void)?
+    /// The selected range covers the main film strip, so its own tap gesture
+    /// must forward the exact point to the parent instead of only selecting
+    /// the range and swallowing the timeline's seek gesture.
+    let onTapPosition: ((Double) -> Void)?
 
     @State private var startDragBase: ClipRange?
     @State private var endDragBase: ClipRange?
@@ -479,9 +484,12 @@ struct RangeInteractionView: View {
                 .contentShape(Rectangle())
                 .frame(width: width, height: size.height)
                 .offset(x: startX, y: 0)
-                .onTapGesture {
+                .simultaneousGesture(SpatialTapGesture().onEnded { value in
                     onSelectRange?(index)
-                }
+                    let relativeX = min(max(value.location.x / max(width, 1), 0), 1)
+                    let seconds = range.startSeconds + (range.endSeconds - range.startSeconds) * Double(relativeX)
+                    onTapPosition?(seconds)
+                })
                 .onLongPressGesture(minimumDuration: 0.5, maximumDistance: 30) {
                     guard let toggle = onToggleLock else { return }
                     PolishKit.Haptics.success.play()
@@ -710,23 +718,13 @@ private struct TrimHandleShape: View {
     var mirrored: Bool = false
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(AppPalette.primaryText)
-            .overlay {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(AppPalette.accent, lineWidth: 1.5)
-            }
-            .overlay {
-                VStack(spacing: 3) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        Capsule()
-                            .fill(AppPalette.accent)
-                            .frame(width: 6, height: 1.5)
-                    }
-                }
-                .environment(\.layoutDirection, mirrored ? .rightToLeft : .leftToRight)
-            }
-            .shadow(color: Color.black.opacity(0.32), radius: 5, y: 2)
+        ReelClipRangeHandle(
+            width: 6,
+            height: 22,
+            mirrored: mirrored,
+            gripLineCount: 3,
+            isInteractive: false
+        )
     }
 }
 
@@ -982,23 +980,13 @@ struct EditableClipRangeBar: View {
     }
 
     private func rowTrimHandle(isStart: Bool) -> some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(AppPalette.primaryText)
-            .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(AppPalette.accent, lineWidth: 1.5)
-            }
-            .overlay {
-                HStack(spacing: 2) {
-                    ForEach(0..<2, id: \.self) { _ in
-                        Capsule()
-                            .fill(AppPalette.accent)
-                            .frame(width: 2, height: 14)
-                    }
-                }
-                .environment(\.layoutDirection, isStart ? .rightToLeft : .leftToRight)
-            }
-            .shadow(color: Color.black.opacity(0.28), radius: 6, y: 3)
+        ReelClipRangeHandle(
+            width: 6,
+            height: 22,
+            mirrored: isStart,
+            gripLineCount: 2,
+            isInteractive: false
+        )
     }
 
     private func startHandleDrag(totalDuration: Double, width: CGFloat) -> some Gesture {

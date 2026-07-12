@@ -6,17 +6,32 @@ import SwiftUI
 /// The player advances through each saved range in display order. The slider
 /// represents the combined sequence duration, while seeking still lands on
 /// the correct source-video time inside the selected range.
-struct SavedClipsPlaybackStrip: View {
+struct SavedClipsPlaybackStrip<ThumbnailRow: View>: View {
     let ranges: [ClipRange]
     let sourceURL: URL?
+    private let onPlaybackStarted: () -> Void
+    private let thumbnailRow: () -> ThumbnailRow
 
     @State private var player = AVPlayer()
     @State private var currentIndex = 0
     @State private var currentClipElapsed = 0.0
     @State private var isPlaying = false
     @State private var isScrubbing = false
+    @State private var isInlinePreviewVisible = false
     @State private var timeObserver: Any?
     @State private var endObserver: NSObjectProtocol?
+
+    init(
+        ranges: [ClipRange],
+        sourceURL: URL?,
+        onPlaybackStarted: @escaping () -> Void = {},
+        @ViewBuilder thumbnailRow: @escaping () -> ThumbnailRow
+    ) {
+        self.ranges = ranges
+        self.sourceURL = sourceURL
+        self.onPlaybackStarted = onPlaybackStarted
+        self.thumbnailRow = thumbnailRow
+    }
 
     private var totalDuration: Double {
         ranges.reduce(0) { $0 + max($1.duration, 0) }
@@ -34,6 +49,17 @@ struct SavedClipsPlaybackStrip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            Group {
+                if isInlinePreviewVisible {
+                    inlineVideoPreview
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                } else {
+                    thumbnailRow()
+                        .transition(.opacity)
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: isInlinePreviewVisible)
+
             HStack(spacing: 9) {
                 Button(action: togglePlayback) {
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
@@ -85,6 +111,7 @@ struct SavedClipsPlaybackStrip: View {
                 }
             )
             .tint(AppPalette.accent)
+            .controlSize(.regular)
             .disabled(!canPlay)
             .accessibilityLabel("Saved clips preview timeline")
             .accessibilityValue("Clip \(min(currentIndex + 1, max(ranges.count, 1))) of \(ranges.count)")
@@ -101,6 +128,48 @@ struct SavedClipsPlaybackStrip: View {
             resetPlayback()
         }
         .onDisappear(perform: tearDown)
+    }
+
+    /// Reuses the compact, controls-free render surface used by the editor
+    /// timeline. It deliberately occupies the thumbnail row's slot so the
+    /// saved-clips card does not grow when the user starts previewing.
+    private var inlineVideoPreview: some View {
+        ZStack {
+            AppPalette.mediaWell
+
+            PreviewVideoView(player: player)
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onTapGesture(perform: togglePlayback)
+
+            if !isPlaying {
+                Image(systemName: "play.fill")
+                    .font(.title2.weight(.black))
+                    .foregroundStyle(AppPalette.background)
+                    .frame(width: 44, height: 44)
+                    .background(AppPalette.accent, in: Circle())
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 150)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Button(action: closeInlinePreview) {
+                Image(systemName: "rectangle.stack")
+                    .font(.caption.weight(.black))
+                    .foregroundStyle(AppPalette.primaryText)
+                    .frame(width: 32, height: 32)
+                    .background(AppPalette.controlSurface.opacity(0.92), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(8)
+            .accessibilityLabel("Show saved clip thumbnails")
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AppPalette.hairline, lineWidth: 1)
+        }
+        .accessibilityLabel(isPlaying ? "Pause saved clips preview" : "Play saved clips preview")
     }
 
     private var canPlay: Bool {
@@ -120,6 +189,10 @@ struct SavedClipsPlaybackStrip: View {
             return
         }
 
+        onPlaybackStarted()
+        withAnimation(.snappy(duration: 0.2)) {
+            isInlinePreviewVisible = true
+        }
         PolishKit.configureVideoPlaybackAudio()
         player.isMuted = false
         isPlaying = true
@@ -129,6 +202,13 @@ struct SavedClipsPlaybackStrip: View {
             player.play()
         }
         PolishKit.Haptics.tap(.medium).play()
+    }
+
+    private func closeInlinePreview() {
+        resetPlayback()
+        withAnimation(.snappy(duration: 0.2)) {
+            isInlinePreviewVisible = false
+        }
     }
 
     private func seekSequence(to position: Double) {
@@ -223,9 +303,12 @@ struct SavedClipsPlaybackStrip: View {
             currentClipElapsed = 0
             installCurrentItem(resume: true)
         } else {
-            isPlaying = false
-            currentClipElapsed = max(ranges[finishedIndex].duration, 0)
-            player.pause()
+            // Saved clips are previewed as one virtual reel. Reinstall the
+            // first range rather than stopping at the final item so the
+            // sequence loops without producing a concatenated export file.
+            currentIndex = 0
+            currentClipElapsed = 0
+            installCurrentItem(resume: true)
         }
     }
 

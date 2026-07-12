@@ -260,11 +260,6 @@ struct ImportTrimSheet: View {
 }
 
 private struct ImportRangeSelector: View {
-    private enum Handle {
-        case start
-        case end
-    }
-
     @Binding var start: Double
     @Binding var end: Double
 
@@ -273,158 +268,20 @@ private struct ImportRangeSelector: View {
     let step: Double
     let onPreviewFrame: (Double) -> Void
 
-    @State private var activeHandle: Handle?
-    @State private var dragStartValue: Double = 0
-
-    private let handleWidth: CGFloat = 14
-
     var body: some View {
-        GeometryReader { proxy in
-            let inset: CGFloat = 22
-            let trackWidth = max(proxy.size.width - inset * 2, 1)
-            let startX = inset + CGFloat(clamped(start / duration)) * trackWidth
-            let endX = inset + CGFloat(clamped(end / duration)) * trackWidth
-
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(AppPalette.controlSurface)
-                    .frame(height: 7)
-                    .padding(.horizontal, inset)
-
-                Capsule()
-                    .fill(AppPalette.accent)
-                    .frame(width: max(7, endX - startX), height: 7)
-                    .offset(x: startX)
-
-                handleLayer(startX: startX, endX: endX)
+        ReelClipRangeSlider(
+            lowerValue: $start,
+            upperValue: $end,
+            bounds: 0...max(duration, minimumSelection),
+            minimumGap: minimumSelection,
+            step: step,
+            onValueChanged: { _, value in
+                onPreviewFrame(value)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(dragGesture(trackWidth: trackWidth, startX: startX, endX: endX))
-        }
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Clip section")
         .accessibilityValue("From \(ImportTrimSheet.timeLabel(start)) to \(ImportTrimSheet.timeLabel(end))")
-    }
-
-    @ViewBuilder
-    private func handleLayer(startX: CGFloat, endX: CGFloat) -> some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 12) {
-                rawHandleLayer(startX: startX, endX: endX)
-            }
-        } else {
-            rawHandleLayer(startX: startX, endX: endX)
-        }
-    }
-
-    private func rawHandleLayer(startX: CGFloat, endX: CGFloat) -> some View {
-        ZStack(alignment: .leading) {
-            handle(
-                at: startX,
-                isStart: true,
-                isActive: activeHandle == .start
-            )
-            .zIndex(activeHandle == .start ? 2 : 1)
-
-            handle(
-                at: endX,
-                isStart: false,
-                isActive: activeHandle == .end
-            )
-            .zIndex(activeHandle == .end ? 2 : 1)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-    }
-
-    private func handle(at position: CGFloat, isStart: Bool, isActive: Bool) -> some View {
-        importHandleSurface(isActive: isActive)
-            .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(AppPalette.accent, lineWidth: isActive ? 2 : 1.25)
-            }
-            .overlay {
-                HStack(spacing: 2) {
-                    ForEach(0..<2, id: \.self) { _ in
-                        Capsule()
-                            .fill(AppPalette.accent)
-                            .frame(width: 1.5, height: 14)
-                    }
-                }
-                .environment(\.layoutDirection, isStart ? .rightToLeft : .leftToRight)
-            }
-            .shadow(color: .black.opacity(isActive ? 0.34 : 0.24), radius: isActive ? 7 : 4, y: 2)
-            .offset(x: position - handleWidth / 2)
-            .scaleEffect(isActive ? 1.08 : 1)
-            .animation(.snappy(duration: 0.16), value: isActive)
-            .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private func importHandleSurface(isActive: Bool) -> some View {
-        let height: CGFloat = isActive ? 40 : 36
-        if #available(iOS 26.0, *) {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.clear)
-                .frame(width: handleWidth, height: height)
-                .glassEffect(
-                    .regular
-                        .tint(AppPalette.accent.opacity(isActive ? 0.24 : 0.12))
-                        .interactive(),
-                    in: .rect(cornerRadius: 7)
-                )
-        } else {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(.regularMaterial)
-                .frame(width: handleWidth, height: height)
-        }
-    }
-
-    private func dragGesture(trackWidth: CGFloat, startX: CGFloat, endX: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                guard abs(value.translation.width) >= abs(value.translation.height) else { return }
-
-                if activeHandle == nil {
-                    activeHandle = nearestHandle(to: value.startLocation.x, startX: startX, endX: endX)
-                    dragStartValue = activeHandle == .start ? start : end
-                }
-
-                let delta = Double(value.translation.width / trackWidth) * duration
-                switch activeHandle {
-                case .start:
-                    let maximum = max(0, end - minimumSelection)
-                    let updatedStart = min(max(snapped(dragStartValue + delta), 0), maximum)
-                    start = updatedStart
-                    onPreviewFrame(updatedStart)
-                case .end:
-                    let minimum = min(duration, start + minimumSelection)
-                    let updatedEnd = max(min(snapped(dragStartValue + delta), duration), minimum)
-                    end = updatedEnd
-                    onPreviewFrame(updatedEnd)
-                case nil:
-                    break
-                }
-            }
-            .onEnded { _ in
-                activeHandle = nil
-            }
-    }
-
-    private func nearestHandle(to position: CGFloat, startX: CGFloat, endX: CGFloat) -> Handle {
-        // When the points are close, this still gives each half of the touch
-        // target to a different endpoint instead of leaving one grip buried.
-        abs(position - startX) <= abs(position - endX) ? .start : .end
-    }
-
-    private func snapped(_ value: Double) -> Double {
-        guard step > 0 else { return value }
-        let rounded = (value / step).rounded() * step
-        return min(max(rounded, 0), duration)
-    }
-
-    private func clamped(_ value: Double) -> Double {
-        min(max(value, 0), 1)
     }
 }
 

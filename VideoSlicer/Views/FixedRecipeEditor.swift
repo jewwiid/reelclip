@@ -185,6 +185,7 @@ struct RecipeDurationSelector: View {
         } else {
             Slider(value: sliderBinding, in: range, step: 1)
                 .tint(AppPalette.accent)
+                .controlSize(.regular)
                 .accessibilityLabel(title)
                 .accessibilityValue(RecipeDurationFormatter.format(clampedValue))
         }
@@ -307,7 +308,6 @@ private struct RecipeRandomRangeSlider: View {
     let bounds: ClosedRange<Double>
     let title: String
 
-    @State private var activeHandle: Handle?
     @State private var editingHandle: Handle?
     @State private var editingText = ""
 
@@ -316,9 +316,6 @@ private struct RecipeRandomRangeSlider: View {
         case upper
     }
 
-    private let handleHitWidth: CGFloat = 44
-    private let thumbDiameter: CGFloat = 30
-    private let trackHeight: CGFloat = 6
     private let minimumGap: Double = 1
 
     private var lowerDisplay: Double {
@@ -335,50 +332,13 @@ private struct RecipeRandomRangeSlider: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            GeometryReader { proxy in
-                let usableWidth = max(proxy.size.width - handleHitWidth, 1)
-                let lowerX = xPosition(for: lowerDisplay, usableWidth: usableWidth) + handleHitWidth / 2
-                let upperX = xPosition(for: upperDisplay, usableWidth: usableWidth) + handleHitWidth / 2
-                let centerY = proxy.size.height / 2
-
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(AppPalette.raisedSurface)
-                        .frame(height: trackHeight)
-                        .position(x: proxy.size.width / 2, y: centerY)
-
-                    Capsule()
-                        .fill(AppPalette.accent)
-                        .frame(width: max(upperX - lowerX, trackHeight), height: trackHeight)
-                        .position(x: lowerX + max(upperX - lowerX, trackHeight) / 2, y: centerY)
-
-                    rangeHandle(isActive: activeHandle == .lower)
-                        .position(x: lowerX, y: centerY)
-                        .zIndex(activeHandle == .lower ? 2 : 1)
-
-                    rangeHandle(isActive: activeHandle == .upper)
-                        .position(x: upperX, y: centerY)
-                        .zIndex(activeHandle == .upper ? 2 : 1)
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let rawValue = valueForLocation(
-                                value.location.x - handleHitWidth / 2,
-                                usableWidth: usableWidth
-                            )
-                            if activeHandle == nil {
-                                activeHandle = closestHandle(to: rawValue)
-                            }
-                            update(activeHandle, to: rawValue)
-                        }
-                        .onEnded { _ in
-                            activeHandle = nil
-                        }
-                )
-            }
-            .frame(height: 40)
+            ReelClipRangeSlider(
+                lowerValue: $lowerValue,
+                upperValue: $upperValue,
+                bounds: bounds,
+                minimumGap: minimumGap,
+                step: 1
+            )
 
             HStack(spacing: 8) {
                 valueEditorButton(
@@ -451,42 +411,6 @@ private struct RecipeRandomRangeSlider: View {
         .accessibilityHint("Double-tap to enter an exact value.")
     }
 
-    private func rangeHandle(isActive: Bool) -> some View {
-        Circle()
-            .fill(Color.white)
-            .frame(width: thumbDiameter, height: thumbDiameter)
-            .overlay {
-                Circle()
-                    .stroke(isActive ? AppPalette.accent : Color.white.opacity(0.9), lineWidth: isActive ? 2 : 1)
-            }
-            .shadow(color: .black.opacity(isActive ? 0.24 : 0.16), radius: isActive ? 7 : 4, x: 0, y: 2)
-            .frame(width: handleHitWidth, height: handleHitWidth)
-            .contentShape(Rectangle())
-            .scaleEffect(isActive ? 1.05 : 1)
-            .animation(.snappy(duration: 0.16), value: isActive)
-    }
-
-    private func xPosition(for value: Double, usableWidth: CGFloat) -> CGFloat {
-        guard bounds.upperBound > bounds.lowerBound else { return 0 }
-        let clamped = min(max(value, bounds.lowerBound), bounds.upperBound)
-        let ratio = (clamped - bounds.lowerBound) / (bounds.upperBound - bounds.lowerBound)
-        return CGFloat(ratio) * usableWidth
-    }
-
-    private func valueForLocation(_ x: CGFloat, usableWidth: CGFloat) -> Double {
-        guard bounds.upperBound > bounds.lowerBound else { return bounds.lowerBound }
-        let clampedX = min(max(x, 0), usableWidth)
-        let ratio = Double(clampedX / max(usableWidth, 1))
-        let value = bounds.lowerBound + ratio * (bounds.upperBound - bounds.lowerBound)
-        return value.rounded()
-    }
-
-    private func closestHandle(to value: Double) -> Handle {
-        let lowerDistance = abs(value - lowerDisplay)
-        let upperDistance = abs(value - upperDisplay)
-        return lowerDistance <= upperDistance ? .lower : .upper
-    }
-
     private func update(_ handle: Handle?, to rawValue: Double) {
         guard let handle else { return }
         switch handle {
@@ -540,16 +464,14 @@ struct FixedRecipeEditor: View {
     @State private var isCustomCountPresented = false
 
     private var effectiveQuery: ClipQuery? {
-        switch inputStyle {
-        case .text:
-            return parsedQuery ?? ClipQueryParser.parse(queryDraft)
-        case .buttons:
-            return parsedQuery ?? ClipQuery(
-                count: buttonCount,
-                durationSeconds: Double(buttonDuration),
-                intervalSeconds: Double(buttonInterval)
-            )
-        }
+        // The editor is buttons-only. `inputStyle` and `queryDraft` remain in
+        // the API so legacy project state can migrate without breaking the
+        // document schema, but the chips must describe the visible controls.
+        ClipQuery(
+            count: buttonCount,
+            durationSeconds: Double(buttonDuration),
+            intervalSeconds: Double(buttonInterval)
+        )
     }
 
     private var showsRepair: Bool {

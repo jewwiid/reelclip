@@ -72,6 +72,10 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>ReelClipFeedbackEmail</key>
+	<string>jude@reelclips.app</string>
+	<key>ReelClipFeedbackEndpoint</key>
+	<string>https://wonderful-impala-496.eu-west-1.convex.site/feedback/submit</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>capcut</string>

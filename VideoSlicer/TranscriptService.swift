@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 import Speech
 
@@ -5,6 +6,8 @@ enum TranscriptServiceError: LocalizedError {
     case recognizerUnavailable
     case authorizationDenied
     case authorizationRestricted
+    case noAudioTrack
+    case audioPreparationFailed(String)
     case noResult
     case underlying(String)
 
@@ -16,6 +19,10 @@ enum TranscriptServiceError: LocalizedError {
             return "Speech recognition permission was denied. Enable it in Settings to transcribe audio."
         case .authorizationRestricted:
             return "Speech recognition is restricted on this device."
+        case .noAudioTrack:
+            return "This video has no playable audio track to transcribe."
+        case .audioPreparationFailed(let message):
+            return "The video's audio could not be prepared for transcription: \(message)"
         case .noResult:
             return "The audio could not be transcribed (silent track, unsupported codec, or too short)."
         case .underlying(let message):
@@ -32,6 +39,9 @@ struct TranscriptService {
     /// on-device so nothing leaves the device even when the user is offline
     /// or has a private network.
     func transcribe(audioFileURL: URL, locale: Locale = .current) async throws -> Transcript {
+        let preparedAudioURL = try await Self.prepareAudioForRecognition(from: audioFileURL)
+        defer { try? FileManager.default.removeItem(at: preparedAudioURL) }
+
         guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
             throw TranscriptServiceError.recognizerUnavailable
         }
@@ -42,7 +52,75 @@ struct TranscriptService {
         }
 
         try await ensureAuthorization()
-        return try await runRecognition(recognizer: recognizer, fileURL: audioFileURL, forceOnDevice: true)
+        return try await runRecognition(recognizer: recognizer, fileURL: preparedAudioURL, forceOnDevice: true)
+    }
+
+    /// Speech accepts a URL, but its video-container path can throw an
+    /// Objective-C exception for certain valid MOV files (notably files with
+    /// no usable audio stream or unusual audio layouts). Exporting a local,
+    /// audio-only M4A keeps that framework path away from the source asset.
+    private static func prepareAudioForRecognition(from sourceURL: URL) async throws -> URL {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            throw TranscriptServiceError.audioPreparationFailed("The imported source is no longer available.")
+        }
+
+        let asset = AVURLAsset(url: sourceURL)
+        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        guard !audioTracks.isEmpty else {
+            throw TranscriptServiceError.noAudioTrack
+        }
+
+        let duration = try await asset.load(.duration)
+        guard CMTimeGetSeconds(duration).isFinite, CMTimeGetSeconds(duration) > 0 else {
+            throw TranscriptServiceError.audioPreparationFailed("The audio duration could not be read.")
+        }
+
+        guard let exportSession = AVAssetExportSession(
+            asset: asset,
+            presetName: AVAssetExportPresetAppleM4A
+        ), exportSession.supportedFileTypes.contains(.m4a) else {
+            throw TranscriptServiceError.audioPreparationFailed("This audio format is not supported.")
+        }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("reelclip-transcript-\(UUID().uuidString).m4a")
+        try? FileManager.default.removeItem(at: outputURL)
+
+        exportSession.outputURL = outputURL
+        exportSession.outputFileType = .m4a
+        exportSession.shouldOptimizeForNetworkUse = false
+
+        let sessionBox = ExportSessionBox(exportSession)
+        do {
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    sessionBox.session.exportAsynchronously {
+                        switch sessionBox.session.status {
+                        case .completed:
+                            guard FileManager.default.fileExists(atPath: outputURL.path) else {
+                                continuation.resume(throwing: TranscriptServiceError.audioPreparationFailed("The audio export did not create a file."))
+                                return
+                            }
+                            continuation.resume(returning: ())
+                        case .cancelled:
+                            continuation.resume(throwing: CancellationError())
+                        case .failed:
+                            continuation.resume(throwing: TranscriptServiceError.audioPreparationFailed(
+                                sessionBox.session.error?.localizedDescription ?? "Audio export failed."
+                            ))
+                        default:
+                            continuation.resume(throwing: TranscriptServiceError.audioPreparationFailed("Audio export ended unexpectedly."))
+                        }
+                    }
+                }
+            } onCancel: {
+                sessionBox.session.cancelExport()
+            }
+            return outputURL
+        } catch {
+            try? FileManager.default.removeItem(at: outputURL)
+            throw error
+        }
     }
 
     private func ensureAuthorization() async throws {
@@ -188,5 +266,13 @@ struct TranscriptService {
 
     private final class TaskBox: @unchecked Sendable {
         var task: SFSpeechRecognitionTask?
+    }
+
+    private final class ExportSessionBox: @unchecked Sendable {
+        let session: AVAssetExportSession
+
+        init(_ session: AVAssetExportSession) {
+            self.session = session
+        }
     }
 }

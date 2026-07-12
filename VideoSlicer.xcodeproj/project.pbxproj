@@ -68,6 +68,7 @@
 		1A2B3C4D5E6F7000000000F7 /* ReelClipProjectDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F8 /* ReelClipProjectDocument.swift */; };
 		1A2B3C4D5E6F700000000300 /* ReelClipPhotoAlbum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000301 /* ReelClipPhotoAlbum.swift */; };
 		1A2B3C4D5E6F700000000501 /* Views/EditorTargetSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000500 /* Views/EditorTargetSheet.swift */; };
+		1A2B3C4D5E6F700000000503 /* Views/FeedbackSupportSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000502 /* Views/FeedbackSupportSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -135,6 +136,7 @@
 		1A2B3C4D5E6F7000000000D5 /* AIUsagePeriodStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIUsagePeriodStore.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000D7 /* Views/PolishKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PolishKit.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F700000000500 /* Views/EditorTargetSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/EditorTargetSheet.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000502 /* Views/FeedbackSupportSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/FeedbackSupportSheet.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000D8 /* Views/PreviewVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PreviewVideoView.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000DD /* ReelClipProjectIcon-64.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "ReelClipProjectIcon-64.png"; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000DE /* ReelClipProjectIcon-128.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "ReelClipProjectIcon-128.png"; sourceTree = "<group>"; };
@@ -240,6 +242,7 @@
 				1A2B3C4D5E6F7000000000D7 /* Views/PolishKit.swift */,
 				1A2B3C4D5E6F7000000000D8 /* Views/PreviewVideoView.swift */,
 				1A2B3C4D5E6F700000000500 /* Views/EditorTargetSheet.swift */,
+				1A2B3C4D5E6F700000000502 /* Views/FeedbackSupportSheet.swift */,
 			);
 			path = VideoSlicer;
 			sourceTree = "<group>";
@@ -424,6 +427,7 @@
 				1A2B3C4D5E6F7000000000D6 /* Views/PolishKit.swift in Sources */,
 				1A2B3C4D5E6F7000000000D9 /* Views/PreviewVideoView.swift in Sources */,
 				1A2B3C4D5E6F700000000501 /* Views/EditorTargetSheet.swift in Sources */,
+				1A2B3C4D5E6F700000000503 /* Views/FeedbackSupportSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -574,7 +578,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 135;
+				CURRENT_PROJECT_VERSION = 136;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VideoSlicer/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -599,7 +603,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 135;
+				CURRENT_PROJECT_VERSION = 136;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = VideoSlicer/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -625,7 +629,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 135;
+				CURRENT_PROJECT_VERSION = 136;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -649,7 +653,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 135;
+				CURRENT_PROJECT_VERSION = 136;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (

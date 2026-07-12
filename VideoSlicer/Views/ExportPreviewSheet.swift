@@ -1,12 +1,11 @@
 import AVKit
 import SwiftUI
 
-/// Asynchronously loads a single thumbnail for a rendered clip URL. Used by
-/// the preview list to show the first frame of each cut without spinning up a
-/// full AVPlayer per row.
+/// Asynchronously loads the first frame for a rendered clip. The review queue
+/// contains independently exported MP4s, so their timeline always starts at
+/// zero even when their source ranges began later in the original video.
 struct ClipPreviewThumbnailView: View {
     let url: URL
-    let midpointSeconds: Double
     @State private var image: UIImage?
 
     var body: some View {
@@ -20,26 +19,23 @@ struct ClipPreviewThumbnailView: View {
             }
         }
         .clipped()
-        .overlay {
-            Image(systemName: "play.fill")
-                .font(.headline.weight(.black))
-                .foregroundStyle(AppPalette.accent)
-        }
         .task(id: url) {
+            image = nil
             await load()
         }
     }
 
     private func load() async {
-        // Cheap reuse: if the OS has already cached an image for this URL,
-        // skip generating a new one.
-        if image != nil { return }
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: 320, height: 320)
-        let target = max(midpointSeconds, 0.05)
-        let time = CMTime(seconds: target, preferredTimescale: 600)
+        // Ask for the output's first frame, not the original source range's
+        // start/midpoint. A small positive epsilon asks AVFoundation for the
+        // first decodable video sample without skipping into the clip.
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 0.1, preferredTimescale: 600)
+        let time = CMTime(value: 1, timescale: 600)
         do {
             let (cgImage, _) = try await generator.image(at: time)
             await MainActor.run {
@@ -205,7 +201,6 @@ struct ExportPreviewSheet: View {
     }
 
     private func previewRow(index: Int, clip: SegmentOutput) -> some View {
-        let midpoint = (clip.startSeconds + clip.endSeconds) / 2
         let isLooping = loopingClipID == clip.id
         let deleteRevealWidth: CGFloat = 92
         let baseOffset: CGFloat = swipedClipID == clip.id ? -deleteRevealWidth : 0
@@ -242,7 +237,7 @@ struct ExportPreviewSheet: View {
                             PreviewVideoView(player: loopPlayer)
                                 .frame(width: 78, height: 78)
                         } else {
-                            ClipPreviewThumbnailView(url: clip.url, midpointSeconds: midpoint)
+                            ClipPreviewThumbnailView(url: clip.url)
                                 .frame(width: 78, height: 78)
                         }
                     }
@@ -253,11 +248,13 @@ struct ExportPreviewSheet: View {
                             .stroke(AppPalette.hairline, lineWidth: 1)
                     }
                     .overlay {
-                        Image(systemName: isLooping ? "pause.fill" : "play.fill")
+                        if !isLooping {
+                            Image(systemName: "play.fill")
                             .font(.headline.weight(.black))
                             .foregroundStyle(AppPalette.accent)
                             .padding(9)
                             .background(Color.black.opacity(0.42), in: Circle())
+                        }
                     }
                 }
                 .buttonStyle(.plain)

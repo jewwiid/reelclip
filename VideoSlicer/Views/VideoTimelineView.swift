@@ -27,6 +27,10 @@ struct VideoTimelineView: View {
     /// film strip. Driven by `TimelineZoom.thumbnailScale`.
     let thumbnailScale: Double
     let selectedRangeIndex: Int?
+    /// The main player is advancing. Auto-follow is deliberately gated to
+    /// playback so a paused user can inspect or manually scroll the timeline
+    /// without it snapping back beneath their finger.
+    let isPlaybackActive: Bool
 
     let onTap: (Double) -> Void
     let onSelectRange: (Int) -> Void
@@ -68,104 +72,133 @@ struct VideoTimelineView: View {
     private var trackHeight: CGFloat { stripHeight + trackSpacing + waveformHeight }
     private var totalHeight: CGFloat { trackHeight }
     @State private var longPressSelectedRangeIndex: Int?
+    @State private var lastAutoFollowSeconds: Double?
+
+    private let playheadScrollAnchorID = "video-timeline-playhead"
 
     var body: some View {
         GeometryReader { outer in
             let contentWidth = timelineContentWidth(for: outer.size.width)
             let timelineSize = CGSize(width: contentWidth, height: stripHeight)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: trackSpacing) {
-                    ZStack(alignment: .topLeading) {
-                        Color.black
+            ScrollViewReader { scrollProxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: trackSpacing) {
+                        ZStack(alignment: .topLeading) {
+                            Color.black
 
-                        if let timeline = TimelineGeometry(
-                            size: timelineSize,
-                            duration: duration
-                        ) {
-                            filmStrip(timeline: timeline)
-                            plannedRangeBands(timeline: timeline)
+                            if let timeline = TimelineGeometry(
+                                size: timelineSize,
+                                duration: duration
+                            ) {
+                                filmStrip(timeline: timeline)
+                                plannedRangeBands(timeline: timeline)
 
-                            if let draft = draftHighlight {
-                                DraftHighlightView(
-                                    range: draft,
-                                    timeline: timeline,
-                                    size: timelineSize,
-                                    thumbnails: thumbnails,
-                                    onMove: onMoveDraft,
-                                    onResizeEnd: onResizeDraftEnd,
-                                    onResizeStart: onResizeDraftStart,
-                                    onEdgeDragPreview: onEdgeDragPreview
-                                )
+                                if let draft = draftHighlight {
+                                    DraftHighlightView(
+                                        range: draft,
+                                        timeline: timeline,
+                                        size: timelineSize,
+                                        thumbnails: thumbnails,
+                                        onMove: onMoveDraft,
+                                        onResizeEnd: onResizeDraftEnd,
+                                        onResizeStart: onResizeDraftStart,
+                                        onEdgeDragPreview: onEdgeDragPreview
+                                    )
+                                }
+
+                                ForEach(Array(plannedRanges.enumerated()), id: \.offset) { index, range in
+                                    rangeInteractionView(
+                                        index: index,
+                                        range: range,
+                                        timeline: timeline,
+                                        timelineSize: timelineSize
+                                    )
+                                }
+
+                                scrubIndicator(timeline: timeline, height: stripHeight)
                             }
-
-                            ForEach(Array(plannedRanges.enumerated()), id: \.offset) { index, range in
-                                rangeInteractionView(
-                                    index: index,
-                                    range: range,
-                                    timeline: timeline,
-                                    timelineSize: timelineSize
-                                )
-                            }
-
-                            scrubIndicator(timeline: timeline, height: stripHeight)
                         }
-                    }
-                    .frame(width: contentWidth, height: stripHeight, alignment: .topLeading)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(tapGesture(contentWidth: contentWidth))
+                        .frame(width: contentWidth, height: stripHeight, alignment: .topLeading)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(tapGesture(contentWidth: contentWidth))
 
-                    WaveformStrip(
-                        samples: waveformSamples,
-                        plannedRanges: plannedRanges,
-                        duration: duration,
-                        scrubPosition: scrubPosition,
-                        onScrub: { _ in },
-                        selectedRangeIndex: selectedRangeIndex,
-                        frameDuration: frameDuration,
-                        onSelectRange: { _ in },
-                        onUpdateRange: { _, _ in },
-                        onTap: { seconds in
-                            // Forward waveform taps (empty space
-                            // OR on a range) to the parent so the
-                            // deselect logic fires. The parent's
-                            // `onTap` checks whether the tap
-                            // landed on a planned range and
-                            // either selects it or deselects.
-                            // Without this forwarding, taps on
-                            // the waveform area fell through
-                            // (`.allowsHitTesting(false)` made
-                            // it pass-through) and the user's
-                            // selection stuck.
-                            onTap(seconds)
-                        },
-                        draftHighlight: draftHighlight,
-                        onMoveDraft: { _ in },
-                        onResizeDraftStart: { _ in },
-                        onResizeDraftEnd: { _ in },
-                        thumbnails: thumbnails,
-                        stripHeight: waveformHeight
-                    )
-                    .frame(width: contentWidth, height: waveformHeight)
+                        WaveformStrip(
+                            samples: waveformSamples,
+                            plannedRanges: plannedRanges,
+                            duration: duration,
+                            scrubPosition: scrubPosition,
+                            onScrub: onScrub,
+                            selectedRangeIndex: selectedRangeIndex,
+                            frameDuration: frameDuration,
+                            onSelectRange: { _ in },
+                            onUpdateRange: { _, _ in },
+                            onTap: onTap,
+                            draftHighlight: draftHighlight,
+                            onMoveDraft: { _ in },
+                            onResizeDraftStart: { _ in },
+                            onResizeDraftEnd: { _ in },
+                            thumbnails: thumbnails,
+                            stripHeight: waveformHeight
+                        )
+                        .frame(width: contentWidth, height: waveformHeight)
+                    }
+                    .frame(width: contentWidth, height: trackHeight, alignment: .topLeading)
+                    .background(alignment: .topLeading) {
+                        playheadScrollAnchor(contentWidth: contentWidth)
+                    }
                 }
-                .frame(width: contentWidth, height: trackHeight, alignment: .topLeading)
-            }
-            // Constrain the ScrollView to the visible width — without this it
-            // sizes to its content's intrinsic width (== contentWidth) and
-            // there's nothing to scroll past at 2x/4x zoom. The inner ZStack
-            // above still spans `contentWidth`, so the wider strip scrolls
-            // inside the visible window.
-            .frame(width: outer.size.width, height: totalHeight)
-            .background(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.black.opacity(0.55))
-                    .frame(height: trackHeight)
-            }
-            .overlay(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(AppPalette.hairline, lineWidth: 1)
-                    .frame(height: trackHeight)
+                // Constrain the ScrollView to the visible width — without this it
+                // sizes to its content's intrinsic width (== contentWidth) and
+                // there's nothing to scroll past at 2x/4x zoom. The inner ZStack
+                // above still spans `contentWidth`, so the wider strip scrolls
+                // inside the visible window.
+                .frame(width: outer.size.width, height: totalHeight)
+                .onChange(of: scrubPosition) { _, _ in
+                    followPlayhead(
+                        using: scrollProxy,
+                        visibleWidth: outer.size.width,
+                        contentWidth: contentWidth
+                    )
+                }
+                .onChange(of: isPlaybackActive) { _, active in
+                    lastAutoFollowSeconds = nil
+                    guard active else { return }
+                    followPlayhead(
+                        using: scrollProxy,
+                        visibleWidth: outer.size.width,
+                        contentWidth: contentWidth,
+                        force: true
+                    )
+                }
+                .onChange(of: thumbnailScale) { _, _ in
+                    lastAutoFollowSeconds = nil
+                    followPlayhead(
+                        using: scrollProxy,
+                        visibleWidth: outer.size.width,
+                        contentWidth: contentWidth,
+                        force: true
+                    )
+                }
+                .onAppear {
+                    followPlayhead(
+                        using: scrollProxy,
+                        visibleWidth: outer.size.width,
+                        contentWidth: contentWidth,
+                        force: true
+                    )
+                }
+                .background(alignment: .bottom) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.black.opacity(0.55))
+                        .frame(height: trackHeight)
+                }
+                .overlay(alignment: .bottom) {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(AppPalette.hairline, lineWidth: 1)
+                        .frame(height: trackHeight)
+                }
             }
         }
         .frame(height: totalHeight)
@@ -190,8 +223,66 @@ struct VideoTimelineView: View {
             onUpdateRange: onUpdateRange,
             onToggleLock: onToggleRangeLock,
             onEdgeDragPreview: onEdgeDragPreview,
-            onScrub: onScrub
+            onScrub: onScrub,
+            onTapPosition: onTap
         )
+    }
+
+    /// A layout-backed scroll target at the current playhead. Unlike an
+    /// offset-only marker, this gives ScrollViewReader a real horizontal
+    /// position to keep visible as playback advances.
+    private func playheadScrollAnchor(contentWidth: CGFloat) -> some View {
+        let safeWidth = max(contentWidth, 1)
+        let ratio = duration > 0 && scrubPosition.isFinite
+            ? min(max(scrubPosition / duration, 0), 1)
+            : 0
+        let leadingWidth = min(max(safeWidth * CGFloat(ratio), 0), safeWidth - 1)
+
+        return HStack(spacing: 0) {
+            Color.clear.frame(width: leadingWidth, height: 1)
+            Color.clear
+                .frame(width: 1, height: 1)
+                .id(playheadScrollAnchorID)
+            Color.clear.frame(width: max(safeWidth - leadingWidth - 1, 0), height: 1)
+        }
+        .frame(width: safeWidth, height: 1, alignment: .leading)
+        .allowsHitTesting(false)
+    }
+
+    private func followPlayhead(
+        using proxy: ScrollViewProxy,
+        visibleWidth: CGFloat,
+        contentWidth: CGFloat,
+        force: Bool = false
+    ) {
+        guard isPlaybackActive,
+              duration.isFinite,
+              duration > 0,
+              visibleWidth.isFinite,
+              visibleWidth > 0,
+              contentWidth.isFinite,
+              contentWidth > visibleWidth + 1,
+              scrubPosition.isFinite
+        else {
+            return
+        }
+
+        // Seeking or starting playback follows immediately. During steady
+        // playback, move only once the playhead has travelled nearly half a
+        // viewport. That keeps it visible without issuing 30 scroll requests
+        // per second from the AVPlayer time observer.
+        let visibleDuration = duration * Double(visibleWidth / contentWidth)
+        let minimumAdvance = max(visibleDuration * 0.45, 0.5)
+        if !force,
+           let lastAutoFollowSeconds,
+           abs(scrubPosition - lastAutoFollowSeconds) < minimumAdvance {
+            return
+        }
+
+        lastAutoFollowSeconds = scrubPosition
+        withAnimation(.linear(duration: 0.16)) {
+            proxy.scrollTo(playheadScrollAnchorID, anchor: .center)
+        }
     }
 
     @ViewBuilder
