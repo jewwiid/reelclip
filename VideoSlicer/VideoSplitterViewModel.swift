@@ -143,21 +143,24 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         plannedRanges.filter { $0.cutMode == cutMode }
     }
 
-    /// The explicit scope for an audio or Apple Intelligence pass. Curated
-    /// ranges win over the live highlight draft; with neither present, the
-    /// analyzer is intentionally allowed to inspect the full source.
+    /// The explicit scope for an audio or Apple Intelligence pass. Planned
+    /// clips are planner outputs and must not silently become the next pass's
+    /// input scope. Silence and AI therefore inspect the full source until a
+    /// separate, explicit scope control is introduced.
     ///
-    /// In silence/AI mode the highlight draft from Splice mode is NOT used
-    /// as the default scope — the user expects "the entire clip" to be the
-    /// default when they enter these modes. They can still narrow the scope
-    /// by adding planned ranges in the current mode.
+    /// In silence/AI mode the highlight draft from Splice mode is NOT used:
+    /// the user expects "the entire clip" when they enter either mode.
     var selectedAnalysisRanges: [ClipRange] {
+        // Planned Silence/AI clips are outputs, not the next run's input
+        // selection. Reusing them here made every subsequent Add analyze only
+        // the previous result. Until the UI exposes a distinct analysis-scope
+        // selection, both analyzers must start from the whole source.
+        if cutMode == .smartPause || cutMode == .aiAssist {
+            return []
+        }
         let curated = plannedRangesForCurrentMode
         if !curated.isEmpty {
             return curated
-        }
-        if cutMode == .smartPause || cutMode == .aiAssist {
-            return []
         }
         if let highlightDraft {
             return [highlightDraft]
@@ -824,59 +827,68 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     func setFixedModeInputStyle(_ style: FixedModeInputStyle) {
-        guard fixedModeInputStyle != style else { return }
-        syncFixedModeAcrossStyles(to: style)
-        fixedModeInputStyle = style
-        defaultFixedModeInputStyle = style
+        if style == .text,
+           let parsed = parsedFixedQuery,
+           parsed.isValid {
+            if let count = parsed.count { fixedModeButtonCount = min(max(count, 1), 50) }
+            if let duration = parsed.durationSeconds {
+                fixedModeButtonDuration = min(max(Int(duration.rounded()), 1), 300)
+            }
+            if let interval = parsed.intervalSeconds {
+                fixedModeButtonInterval = min(max(Int(interval.rounded()), 1), 300)
+            }
+        }
+        guard fixedModeInputStyle != .buttons || defaultFixedModeInputStyle != .buttons else { return }
+        fixedModeInputStyle = .buttons
+        defaultFixedModeInputStyle = .buttons
         defaultFixedModeButtonCount = fixedModeButtonCount
         defaultFixedModeButtonDuration = fixedModeButtonDuration
         defaultFixedModeButtonInterval = fixedModeButtonInterval
-        if style == .text {
-            defaultFixedModeQueryDraft = resolvedDefaultFixedModeQueryDraft
-        }
+        fixedModeQueryDraft = FixedModeQueryFormatter.phrase(
+            count: fixedModeButtonCount,
+            duration: fixedModeButtonDuration,
+            interval: fixedModeButtonInterval
+        )
+        defaultFixedModeQueryDraft = fixedModeQueryDraft
+        invalidateRecipePreview(status: "Previewing fixed clip recipe.")
         persistCurrentProject()
     }
 
     var effectiveFixedQuery: ClipQuery? {
-        switch fixedModeInputStyle {
-        case .text:
-            return parsedFixedQuery
-        case .buttons:
-            return ClipQuery(
-                count: fixedModeButtonCount,
-                durationSeconds: Double(fixedModeButtonDuration),
-                intervalSeconds: Double(fixedModeButtonInterval)
-            )
-        }
+        // Cut is a buttons-only editor. Older projects can still decode a
+        // persisted `.text` style, but allowing that hidden flag to choose the
+        // planner made the visible count/duration/spacing controls lie. Keep
+        // the legacy field for project compatibility and always plan from the
+        // controls the user can actually see.
+        ClipQuery(
+            count: fixedModeButtonCount,
+            durationSeconds: Double(fixedModeButtonDuration),
+            intervalSeconds: Double(fixedModeButtonInterval)
+        )
     }
 
     func fixedModeRanges(forSourceDuration totalDuration: Double) -> [ClipRange] {
         guard totalDuration.isFinite, totalDuration > 0 else { return [] }
-        switch fixedModeInputStyle {
-        case .text:
-            return Self.stampedFixedRanges(parsedFixedQuery?.ranges(forSourceDuration: totalDuration) ?? [])
-        case .buttons:
-            if fixedModeRandomDuration || fixedModeRandomInterval {
-                return Self.randomizedFixedRanges(
-                    totalDuration: totalDuration,
-                    requestedCount: fixedModeButtonCount,
-                    baseDuration: fixedModeButtonDuration,
-                    baseInterval: fixedModeButtonInterval,
-                    durationRange: fixedModeRandomDurationRange,
-                    intervalRange: fixedModeRandomIntervalRange,
-                    randomizeDuration: fixedModeRandomDuration,
-                    randomizeInterval: fixedModeRandomInterval,
-                    seed: fixedModeRandomSeed
-                )
-            }
-            let ranges = ClipQuery(
-                count: fixedModeButtonCount,
-                durationSeconds: Double(fixedModeButtonDuration),
-                intervalSeconds: Double(fixedModeButtonInterval)
+        if fixedModeRandomDuration || fixedModeRandomInterval {
+            return Self.randomizedFixedRanges(
+                totalDuration: totalDuration,
+                requestedCount: fixedModeButtonCount,
+                baseDuration: fixedModeButtonDuration,
+                baseInterval: fixedModeButtonInterval,
+                durationRange: fixedModeRandomDurationRange,
+                intervalRange: fixedModeRandomIntervalRange,
+                randomizeDuration: fixedModeRandomDuration,
+                randomizeInterval: fixedModeRandomInterval,
+                seed: fixedModeRandomSeed
             )
-            .ranges(forSourceDuration: totalDuration)
-            return Self.stampedFixedRanges(ranges)
         }
+        let ranges = ClipQuery(
+            count: fixedModeButtonCount,
+            durationSeconds: Double(fixedModeButtonDuration),
+            intervalSeconds: Double(fixedModeButtonInterval)
+        )
+        .ranges(forSourceDuration: totalDuration)
+        return Self.stampedFixedRanges(ranges)
     }
 
     func setFixedModeRandomDuration(_ enabled: Bool) {
@@ -1018,18 +1030,34 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         self.projectStore = MediaProjectStore(workspace: mediaWorkspace)
         self.exportNotifications = exportNotifications
         self.exportBackgroundTasks = exportBackgroundTasks ?? ExportBackgroundTaskManager.shared
-        let defaults = UserDefaultsStore()
+        var defaults = UserDefaultsStore()
         self.userDefaultsStore = defaults
         self.defaultCutMode = defaults.defaultCutMode
         self.defaultSilenceClipDuration = defaults.defaultSilenceClipDurationSeconds
         self.defaultAiClipDuration = defaults.defaultAiClipDurationSeconds
         self.defaultHighlightDuration = defaults.defaultHighlightDurationSeconds
         self.defaultEditPrompt = defaults.defaultEditPrompt
-        self.defaultFixedModeInputStyle = defaults.defaultFixedModeInputStyle
+        let legacyDefaultQuery = defaults.defaultFixedModeInputStyle == .text
+            ? ClipQueryParser.parse(defaults.defaultFixedModeQueryDraft)
+            : nil
+        self.defaultFixedModeInputStyle = .buttons
         self.defaultFixedModeQueryDraft = defaults.defaultFixedModeQueryDraft
-        self.defaultFixedModeButtonCount = defaults.defaultFixedModeButtonCount
-        self.defaultFixedModeButtonDuration = defaults.defaultFixedModeButtonDuration
-        self.defaultFixedModeButtonInterval = defaults.defaultFixedModeButtonInterval
+        self.defaultFixedModeButtonCount = min(
+            max(legacyDefaultQuery?.count ?? defaults.defaultFixedModeButtonCount, 1),
+            50
+        )
+        self.defaultFixedModeButtonDuration = min(
+            max(Int((legacyDefaultQuery?.durationSeconds ?? Double(defaults.defaultFixedModeButtonDuration)).rounded()), 1),
+            120
+        )
+        self.defaultFixedModeButtonInterval = min(
+            max(Int((legacyDefaultQuery?.intervalSeconds ?? Double(defaults.defaultFixedModeButtonInterval)).rounded()), 1),
+            120
+        )
+        defaults.defaultFixedModeInputStyle = .buttons
+        defaults.defaultFixedModeButtonCount = self.defaultFixedModeButtonCount
+        defaults.defaultFixedModeButtonDuration = self.defaultFixedModeButtonDuration
+        defaults.defaultFixedModeButtonInterval = self.defaultFixedModeButtonInterval
         loadProjects()
         cleanupExpiredExports()
         refreshAIUsagePeriod()
@@ -1645,6 +1673,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // "--" when the user hasn't planned anything in this mode
         // yet, so the tile reads cleanly before any work is done.
         let currentModeRanges = plannedRangesForCurrentMode
+        if currentModeRanges.isEmpty,
+           cutMode == .aiAssist,
+           let expectedTotalDuration = resolvedAIEditIntent.expectedTotalDuration {
+            return Self.formatDuration(expectedTotalDuration)
+        }
         guard !currentModeRanges.isEmpty else { return "--" }
         let total = currentModeRanges.reduce(0.0) { partial, range in
             partial + max(0, range.endSeconds - range.startSeconds)
@@ -1661,8 +1694,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // mode must never produce a misleading "source is shorter" error.
         guard cutMode == .fixed else { return nil }
         guard let durationSeconds, durationSeconds.isFinite, durationSeconds > 0 else { return nil }
-        if fixedModeInputStyle == .buttons,
-           fixedModeRandomDuration || fixedModeRandomInterval {
+        if fixedModeRandomDuration || fixedModeRandomInterval {
             let ranges = fixedModeRanges(forSourceDuration: durationSeconds)
             let lastEnd = ranges.last?.endSeconds ?? 0
             let actualClipSpan = ranges.first.map { $0.endSeconds - $0.startSeconds } ?? 0
@@ -1694,8 +1726,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // what's actually achievable, so we don't need a separate "did the
         // user ask for too many?" check here — `liveRecipeFeasibility`
         // surfaces that discrepancy.
-        if fixedModeInputStyle == .buttons,
-           fixedModeRandomDuration || fixedModeRandomInterval {
+        if fixedModeRandomDuration || fixedModeRandomInterval {
             return fixedModeRanges(forSourceDuration: durationSeconds).count
         }
 
@@ -1728,6 +1759,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 return "\(feasibility.achievableCount) of \(requested)"
             }
             return "\(expectedClipCount)"
+        }
+
+        if cutMode == .aiAssist,
+           let expected = resolvedAIEditIntent.expectedClipCount {
+            return "\(expected)"
         }
 
         let currentModeCount = plannedRangesForCurrentMode.count
@@ -1775,6 +1811,27 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
         let value = Double(fallback)
         return value.isFinite && value >= 1 ? value : nil
+    }
+
+    var resolvedAIEditIntent: AIEditIntent {
+        AIEditIntentParser.parse(
+            prompt: editPrompt,
+            fallbackDuration: parsedSegmentLength ?? Double(defaultAiClipDuration)
+        )
+    }
+
+    func updateAIEditPrompt(_ prompt: String) {
+        editPrompt = prompt
+        synchronizeAIIntentDurationIfNeeded()
+    }
+
+    private func synchronizeAIIntentDurationIfNeeded() {
+        let intent = AIEditIntentParser.parse(
+            prompt: editPrompt,
+            fallbackDuration: parsedSegmentLength ?? Double(defaultAiClipDuration)
+        )
+        guard intent.requiresExactDuration else { return }
+        segmentLengthText = Self.editableDurationText(intent.targetClipDurationSeconds)
     }
 
     var hasUnsavedPlan: Bool {
@@ -2283,13 +2340,12 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     func setDefaultFixedModeInputStyle(_ style: FixedModeInputStyle) {
-        defaultFixedModeInputStyle = style
+        // Text entry was removed from the shared editor. Accept legacy calls
+        // long enough to migrate their parsed values, then normalize to the
+        // only style the UI exposes.
         if style == .text,
-           defaultFixedModeQueryDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            defaultFixedModeQueryDraft = resolvedDefaultFixedModeQueryDraft
-        } else if style == .buttons,
-                  let parsed = ClipQueryParser.parse(defaultFixedModeQueryDraft),
-                  parsed.isValid {
+           let parsed = ClipQueryParser.parse(defaultFixedModeQueryDraft),
+           parsed.isValid {
             if let count = parsed.count {
                 defaultFixedModeButtonCount = min(max(count, 1), 50)
             }
@@ -2300,6 +2356,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 defaultFixedModeButtonInterval = min(max(Int(interval.rounded()), 1), 120)
             }
         }
+        defaultFixedModeInputStyle = .buttons
         applyDefaultsToBlankEditorIfNeeded()
     }
 
@@ -2323,37 +2380,31 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
     func setDefaultFixedModeButtonCount(_ count: Int) {
         defaultFixedModeButtonCount = min(max(count, 1), 50)
-        if defaultFixedModeInputStyle == .text {
-            defaultFixedModeQueryDraft = FixedModeQueryFormatter.phrase(
-                count: defaultFixedModeButtonCount,
-                duration: defaultFixedModeButtonDuration,
-                interval: defaultFixedModeButtonInterval
-            )
-        }
+        defaultFixedModeQueryDraft = FixedModeQueryFormatter.phrase(
+            count: defaultFixedModeButtonCount,
+            duration: defaultFixedModeButtonDuration,
+            interval: defaultFixedModeButtonInterval
+        )
         applyDefaultsToBlankEditorIfNeeded()
     }
 
     func setDefaultFixedModeButtonDuration(_ seconds: Int) {
         defaultFixedModeButtonDuration = min(max(seconds, 1), 120)
-        if defaultFixedModeInputStyle == .text {
-            defaultFixedModeQueryDraft = FixedModeQueryFormatter.phrase(
-                count: defaultFixedModeButtonCount,
-                duration: defaultFixedModeButtonDuration,
-                interval: defaultFixedModeButtonInterval
-            )
-        }
+        defaultFixedModeQueryDraft = FixedModeQueryFormatter.phrase(
+            count: defaultFixedModeButtonCount,
+            duration: defaultFixedModeButtonDuration,
+            interval: defaultFixedModeButtonInterval
+        )
         applyDefaultsToBlankEditorIfNeeded()
     }
 
     func setDefaultFixedModeButtonInterval(_ seconds: Int) {
         defaultFixedModeButtonInterval = min(max(seconds, 1), 120)
-        if defaultFixedModeInputStyle == .text {
-            defaultFixedModeQueryDraft = FixedModeQueryFormatter.phrase(
-                count: defaultFixedModeButtonCount,
-                duration: defaultFixedModeButtonDuration,
-                interval: defaultFixedModeButtonInterval
-            )
-        }
+        defaultFixedModeQueryDraft = FixedModeQueryFormatter.phrase(
+            count: defaultFixedModeButtonCount,
+            duration: defaultFixedModeButtonDuration,
+            interval: defaultFixedModeButtonInterval
+        )
         applyDefaultsToBlankEditorIfNeeded()
     }
 
@@ -2712,7 +2763,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     func resetCurrentRecipeFields() {
         switch cutMode {
         case .fixed:
-            fixedModeInputStyle = defaultFixedModeInputStyle
+            fixedModeInputStyle = .buttons
             fixedModeQueryDraft = resolvedDefaultFixedModeQueryDraft
             fixedModeButtonCount = defaultFixedModeButtonCount
             fixedModeButtonDuration = defaultFixedModeButtonDuration
@@ -2732,6 +2783,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         case .aiAssist:
             editPrompt = defaultEditPrompt
             segmentLengthText = "\(defaultAiClipDuration)"
+            synchronizeAIIntentDurationIfNeeded()
         case .highlight:
             highlightDraftStart = nil
             highlightDraftDuration = Double(defaultHighlightDuration)
@@ -2775,8 +2827,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // function before dispatching its async work, so clearing
         // the fields right after is safe — the dispatched Task
         // already captured what it needs).
-        prepareCuts()
-        resetCurrentRecipeFields()
+        if prepareCuts() {
+            resetCurrentRecipeFields()
+        }
     }
 
     /// Local "Save" action. Snapshots only the active recipe's
@@ -2958,11 +3011,12 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
     }
 
-    func prepareCuts() {
+    @discardableResult
+    func prepareCuts() -> Bool {
         guard let sourceURL,
               FileManager.default.fileExists(atPath: sourceURL.path) else {
             errorMessage = "Pick a video first."
-            return
+            return false
         }
         guard let durationSnapshot = durationSeconds,
               durationSnapshot.isFinite,
@@ -2972,11 +3026,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             // The Add button also uses this same invariant via `canPrepare`.
             errorMessage = "The video is still loading. Wait for the duration to appear, then try again."
             statusMessage = "Waiting for video duration."
-            return
+            return false
         }
         guard let segmentLength = parsedSegmentLength else {
             errorMessage = "Enter a segment length of at least 1 second."
-            return
+            return false
         }
         let mode = cutMode
         let fixedQuery = effectiveFixedQuery.map {
@@ -2986,7 +3040,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 intervalSeconds: $0.intervalSeconds
             )
         }
-        let fixedInputStyleSnapshot = fixedModeInputStyle
         let fixedButtonCountSnapshot = fixedModeButtonCount
         let fixedButtonDurationSnapshot = fixedModeButtonDuration
         let fixedButtonIntervalSnapshot = fixedModeButtonInterval
@@ -3014,14 +3067,34 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
            let durationSeconds, durationSeconds > 0 {
             errorMessage = "Source is shorter than one clip. Trim a clip ≤ \(Int(durationSeconds))s, shorten the source, or switch to Smart Pause / Highlight."
             statusMessage = "Recipe needs more source than is available."
-            return
+            return false
+        }
+
+        if mode == .aiAssist {
+            let intent = AIEditIntentParser.parse(
+                prompt: editPromptSnapshot,
+                fallbackDuration: segmentLength
+            )
+            let availableDuration = selectionRangesSnapshot.isEmpty
+                ? durationSnapshot
+                : selectionRangesSnapshot.reduce(0.0) { $0 + $1.duration }
+            if let requiredDuration = intent.expectedTotalDuration,
+               requiredDuration > availableDuration + 0.001 {
+                let error = AIEditIntentError.insufficientSource(
+                    required: requiredDuration,
+                    available: availableDuration
+                )
+                errorMessage = error.localizedDescription
+                statusMessage = "AI recipe needs more source footage."
+                return false
+            }
         }
 
         // Free-tier AI quota gate. Paid tiers have unlimited runs.
         if mode == .aiAssist, tierSnapshot == .free, !canRunAnotherFreeAIPlan {
             errorMessage = "You've used your \(MediaProcessingLimits.monthlyFreeAIQuota) free AI plans for this month. Upgrade to Creator from Settings to keep going."
             statusMessage = "Free-tier AI plan quota reached."
-            return
+            return false
         }
 
         processingTask?.cancel()
@@ -3035,14 +3108,6 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             errorMessage = nil
             statusMessage = statusSnapshot
 
-            // Count the request when the AI task is dispatched, not only
-            // after a successful result. UserDefaults persistence keeps a
-            // consumed Free use accounted for if the app is force-closed
-            // while Apple Intelligence is still working.
-            if mode == .aiAssist, tierSnapshot == .free {
-                recordAIPlanInvocation()
-            }
-
             do {
                 let ranges: [ClipRange]
 
@@ -3050,8 +3115,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 case .fixed:
                     let durationSeconds = durationSnapshot
                     let fresh: [ClipRange]
-                    if fixedInputStyleSnapshot == .buttons,
-                       fixedRandomDurationSnapshot || fixedRandomIntervalSnapshot {
+                    if fixedRandomDurationSnapshot || fixedRandomIntervalSnapshot {
                         fresh = Self.randomizedFixedRanges(
                             totalDuration: durationSeconds,
                             requestedCount: fixedButtonCountSnapshot,
@@ -3171,7 +3235,12 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                     stampedRanges,
                     totalDuration: duration,
                     frameDuration: frameDurationSnapshot,
-                    minimumDuration: mode == .fixed ? min(Self.minimumFixedClipDuration(segmentLength: segmentLength), duration) : MediaProcessingLimits.minimumAIClipDuration
+                    // Fixed recipes can intentionally scale clips below the
+                    // configured duration to honour an explicit count. A
+                    // second minimum derived from the unrelated legacy
+                    // `segmentLengthText` expanded those clips again after
+                    // planning. Validate only the planner's real 0.05s floor.
+                    minimumDuration: mode == .fixed ? min(0.05, duration) : MediaProcessingLimits.minimumAIClipDuration
                 )
                 // `ClipRange` defaults to `.highlight` for legacy decoding.
                 // Re-stamp after every normalization step as the final mode
@@ -3261,6 +3330,12 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 }
 
                 progress = 1
+                // Consume a Free AI use only after Apple Intelligence returns
+                // a valid ReelClip plan. Device/model/locale failures and
+                // impossible structured requests must not spend the quota.
+                if mode == .aiAssist, tierSnapshot == .free {
+                    recordAIPlanInvocation()
+                }
                 let currentModeCount = plannedRanges.filter { $0.cutMode == mode }.count
                 if mode != .highlight, previousCount > 0 {
                     let addedCount = max(currentModeCount - previousCount, 0)
@@ -3291,6 +3366,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             processingPhase = .idle
             processingTask = nil
         }
+        return true
     }
 
     func exportPreparedClips() {
@@ -3947,7 +4023,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     /// Step 2 of the save flow: commit the rendered clips to the photo library.
-    func confirmPendingExport() {
+    /// `completion` fires on the main actor after a successful save, so the
+    /// caller can chain an action that depends on the clips being in Photos
+    /// (e.g. opening a target editor app that reads the latest video from
+    /// the camera roll). Not called on failure.
+    func confirmPendingExport(completion: (@MainActor () -> Void)? = nil) {
         guard let pending = pendingExportClips, !pending.isEmpty else {
             isShowingExportPreview = false
             return
@@ -3979,6 +4059,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                     projectTitle: exportProjectTitle
                 )
                 persistCurrentProject()
+                if let completion {
+                    await MainActor.run { completion() }
+                }
             } catch is CancellationError {
                 statusMessage = "Save cancelled."
             } catch VideoSegmenterError.cancelled {
@@ -4113,7 +4196,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         highlightDraftStart = nil
         highlightDraftDuration = Double(defaultHighlightDuration)
         hasManualHighlightDuration = false
-        fixedModeInputStyle = defaultFixedModeInputStyle
+        fixedModeInputStyle = .buttons
         fixedModeQueryDraft = resolvedDefaultFixedModeQueryDraft
         fixedModeButtonCount = defaultFixedModeButtonCount
         fixedModeButtonDuration = defaultFixedModeButtonDuration
@@ -4143,7 +4226,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         highlightDraftStart = nil
         highlightDraftDuration = Double(defaultHighlightDuration)
         hasManualHighlightDuration = false
-        fixedModeInputStyle = defaultFixedModeInputStyle
+        fixedModeInputStyle = .buttons
         fixedModeQueryDraft = resolvedDefaultFixedModeQueryDraft
         fixedModeButtonCount = defaultFixedModeButtonCount
         fixedModeButtonDuration = defaultFixedModeButtonDuration
@@ -4977,15 +5060,38 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         plannedRanges = scene.plannedRanges
         highlightDraftStart = scene.highlightDraftStart
         highlightDraftDuration = scene.highlightDraftDuration ?? highlightDraftDuration
+        fixedModeInputStyle = .buttons
+        fixedModeQueryDraft = resolvedDefaultFixedModeQueryDraft
+        fixedModeButtonCount = defaultFixedModeButtonCount
+        fixedModeButtonDuration = defaultFixedModeButtonDuration
+        fixedModeButtonInterval = defaultFixedModeButtonInterval
+        fixedModeRandomDuration = false
+        fixedModeRandomInterval = false
+        fixedModeRandomDurationMinimum = 1
+        fixedModeRandomDurationMaximum = defaultFixedModeButtonDuration
+        fixedModeRandomIntervalMinimum = 1
+        fixedModeRandomIntervalMaximum = defaultFixedModeButtonInterval
         if let editorState = scene.editorState {
+            let legacyQuery = editorState.fixedModeInputStyle == .text
+                ? ClipQueryParser.parse(editorState.fixedModeQueryDraft)
+                : nil
             timelineZoom = editorState.timelineZoom
             selectedAIProvider = editorState.selectedAIProvider
             hasManualHighlightDuration = editorState.hasManualHighlightDuration
-            fixedModeInputStyle = editorState.fixedModeInputStyle
+            fixedModeInputStyle = .buttons
             fixedModeQueryDraft = editorState.fixedModeQueryDraft
-            fixedModeButtonCount = min(max(editorState.fixedModeButtonCount, 1), MediaProcessingLimits.maximumPlannedClips)
-            fixedModeButtonDuration = min(max(editorState.fixedModeButtonDuration, 1), 300)
-            fixedModeButtonInterval = min(max(editorState.fixedModeButtonInterval, 1), 300)
+            fixedModeButtonCount = min(
+                max(legacyQuery?.count ?? editorState.fixedModeButtonCount, 1),
+                MediaProcessingLimits.maximumPlannedClips
+            )
+            fixedModeButtonDuration = min(
+                max(Int((legacyQuery?.durationSeconds ?? Double(editorState.fixedModeButtonDuration)).rounded()), 1),
+                300
+            )
+            fixedModeButtonInterval = min(
+                max(Int((legacyQuery?.intervalSeconds ?? Double(editorState.fixedModeButtonInterval)).rounded()), 1),
+                300
+            )
             fixedModeRandomDuration = editorState.fixedModeRandomDuration
             fixedModeRandomInterval = editorState.fixedModeRandomInterval
             fixedModeRandomDurationMinimum = min(max(editorState.fixedModeRandomDurationMinimum, 1), 300)
@@ -4995,6 +5101,9 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             fixedModeRandomSeed = editorState.fixedModeRandomSeed
             normalizeFixedModeRandomDurationBounds(anchor: fixedModeRandomDurationMaximum)
             normalizeFixedModeRandomIntervalBounds(anchor: fixedModeRandomIntervalMaximum)
+        }
+        if cutMode == .aiAssist {
+            synchronizeAIIntentDurationIfNeeded()
         }
         transcript = scene.transcript
         transcriptState = scene.transcript?.isEmpty == false ? .ready : .idle
@@ -5276,13 +5385,32 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
 
         try MediaProcessingLimits.validateSourceDuration(durationSeconds, for: tier)
-        let features = try await timelineFeaturePack(
+        let editIntent = AIEditIntentParser.parse(
+            prompt: prompt,
+            fallbackDuration: fallbackSegmentLength
+        )
+        var features = try await timelineFeaturePack(
             for: sourceURL,
             durationSeconds: durationSeconds,
-            fallbackSegmentLength: fallbackSegmentLength,
+            fallbackSegmentLength: editIntent.targetClipDurationSeconds,
             selectionRanges: selectionRanges,
             includeVideoFrames: provider.supportsVision
         )
+        features.editIntent = editIntent
+        if let requestedClipCount = editIntent.expectedClipCount {
+            features.requestedMaxClips = requestedClipCount
+        }
+
+        let availableDuration = features.selectionRanges.isEmpty
+            ? durationSeconds
+            : features.selectionRanges.reduce(0.0) { $0 + $1.duration }
+        if let requiredDuration = editIntent.expectedTotalDuration,
+           requiredDuration > availableDuration + 0.001 {
+            throw AIEditIntentError.insufficientSource(
+                required: requiredDuration,
+                available: availableDuration
+            )
+        }
 
         // Apple Intelligence is the only AI runtime. If the device
         // doesn't support it (pre-iOS 26, or Apple Intelligence
@@ -5321,9 +5449,13 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                     credential: credential
                 )
             }
-            return selectionRanges.isEmpty
+            let boundedRanges = selectionRanges.isEmpty
                 ? ranges
                 : Self.constrainedRanges(ranges, to: selectionRanges, totalDuration: durationSeconds)
+            return try AIEditPlanResolver.resolve(
+                candidates: boundedRanges,
+                features: features
+            )
         } catch {
             // Re-raise — caller renders the localised error message.
             throw error
@@ -5485,6 +5617,26 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 selectionRanges: normalizedSelectionRanges
             )
             : []
+        let transcriptSnippets = (transcript?.segments ?? []).compactMap { segment -> TimelineTranscriptSnippet? in
+            let start = min(max(segment.startSeconds, 0), durationSeconds)
+            let end = min(max(segment.endSeconds, 0), durationSeconds)
+            guard end > start else { return nil }
+            if !normalizedSelectionRanges.isEmpty,
+               !normalizedSelectionRanges.contains(where: {
+                   start < $0.endSeconds && end > $0.startSeconds
+               }) {
+                return nil
+            }
+            let text = segment.text
+                .split(whereSeparator: { $0.isWhitespace })
+                .joined(separator: " ")
+            guard !text.isEmpty else { return nil }
+            return TimelineTranscriptSnippet(
+                startSeconds: start,
+                endSeconds: end,
+                text: text
+            )
+        }
 
         return TimelineFeaturePack(
             sourceDurationSeconds: durationSeconds,
@@ -5494,6 +5646,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             analysisPoints: points,
             fallbackRanges: fallbackRanges,
             videoFrames: videoFrames,
+            transcriptSnippets: transcriptSnippets,
             selectionRanges: normalizedSelectionRanges
         )
     }
@@ -5723,6 +5876,14 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
 
         return "\(minutes):\(String(format: "%02d", remainingSeconds))"
+    }
+
+    private static func editableDurationText(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds > 0 else { return "" }
+        if abs(seconds - seconds.rounded()) < 0.001 {
+            return "\(Int(seconds.rounded()))"
+        }
+        return String(format: "%.1f", seconds)
     }
 
     private static func safeFrameDuration(_ frameDuration: Double) -> Double {

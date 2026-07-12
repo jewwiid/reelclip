@@ -65,6 +65,7 @@ struct ExportPreviewSheet: View {
     /// why some scenes didn't contribute clips.
     let missingScenes: [SkippedSceneExport]
     let onSave: () -> Void
+    let onSaveAndOpen: (EditorTarget) -> Void
     let onDelete: (SegmentOutput) -> Void
     let onCancel: () -> Void
 
@@ -74,6 +75,8 @@ struct ExportPreviewSheet: View {
     @State private var swipedClipID: UUID?
     @State private var swipeDragClipID: UUID?
     @State private var swipeDragOffset: CGFloat = 0
+    @State private var isShowingEditorTargets = false
+    @State private var pendingEditorOpen: EditorTarget?
 
     var body: some View {
         NavigationStack {
@@ -103,6 +106,30 @@ struct ExportPreviewSheet: View {
             }
             .safeAreaInset(edge: .bottom) {
                 saveBar
+            }
+            .sheet(isPresented: $isShowingEditorTargets) {
+                EditorTargetSheet(
+                    onSelect: { target in
+                        isShowingEditorTargets = false
+                        // Small delay so the target sheet's dismiss animation
+                        // doesn't fight the system app-open transition.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            pendingEditorOpen = target
+                        }
+                    },
+                    onCancel: { isShowingEditorTargets = false }
+                )
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+            }
+            .onChange(of: pendingEditorOpen) { _, target in
+                guard let target else { return }
+                pendingEditorOpen = nil
+                // The completion fires after Photos write completes, so
+                // the target app's "import from Photos" picks up the
+                // freshly-saved clips instead of whatever was last in
+                // the camera roll.
+                onSaveAndOpen(target)
             }
         }
         .tint(AppPalette.accent)
@@ -359,6 +386,23 @@ struct ExportPreviewSheet: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSave)
+
+                Button {
+                    isShowingEditorTargets = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up.on.square")
+                        .font(.headline.weight(.bold))
+                        .frame(width: 50, height: 50)
+                        .foregroundStyle(canSave ? AppPalette.primaryText : AppPalette.mutedText)
+                        .background(
+                            canSave ? AppPalette.controlSurface : AppPalette.disabledSurface,
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSave)
+                .accessibilityLabel("Send clips to a video editor app")
+                .accessibilityHint("Opens CapCut, TikTok, Instagram Reels, or YouTube Shorts after saving the clips to Photos.")
             }
             .padding(.horizontal, 18)
             .padding(.top, 12)

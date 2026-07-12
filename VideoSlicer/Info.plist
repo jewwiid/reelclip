@@ -73,7 +73,12 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSApplicationQueriesSchemes</key>
-	<array/>
+	<array>
+		<string>capcut</string>
+		<string>tiktok</string>
+		<string>instagram-stories</string>
+		<string>youtube</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>

@@ -1102,9 +1102,13 @@ struct ClipView: View {
                     frameDuration: viewModel.frameDurationSeconds,
                     thumbnailScale: viewModel.timelineZoom.thumbnailScale,
                     selectedRangeIndex: effectiveSelectedRangeIndex,
+                    isPlaybackActive: isPreviewPlaying,
                     onTap: { seconds in
                         viewModel.updateScrubPosition(seconds)
-                        seekPreview(to: seconds, pause: true)
+                        // A point tap is a seek, not a scrub gesture. Preserve
+                        // the current playback state so a playing preview
+                        // jumps to the chosen frame and keeps moving.
+                        seekPreview(to: seconds)
                         if let index = liveTimelineRanges.firstIndex(where: {
                             seconds >= $0.startSeconds && seconds <= $0.endSeconds
                         }), let rawIndex = plannedRangeIndex(forTimelineIndex: index) {
@@ -1215,6 +1219,8 @@ struct ClipView: View {
                 in: 0...Double(lastIdx),
                 step: 1
             )
+            .tint(AppPalette.accent)
+            .controlSize(.regular)
             .frame(width: 110)
             Text(viewModel.timelineZoom.rawValue)
                 .font(.caption.weight(.bold))
@@ -1239,6 +1245,8 @@ struct ClipView: View {
                 ),
                 in: 0...max(1, viewModel.durationSeconds ?? 1)
             )
+            .tint(AppPalette.accent)
+            .controlSize(.regular)
 
             Text("\(viewModel.scrubPositionLabel) / \(viewModel.durationLabel)")
                 .font(.caption.monospacedDigit().weight(.bold))
@@ -2368,7 +2376,10 @@ struct ClipView: View {
 
             TextField(
                 "What should the cut feel like?",
-                text: $viewModel.editPrompt,
+                text: Binding(
+                    get: { viewModel.editPrompt },
+                    set: { viewModel.updateAIEditPrompt($0) }
+                ),
                 axis: .vertical
             )
             .lineLimit(2...4)
@@ -2382,6 +2393,24 @@ struct ClipView: View {
                     .stroke(AppPalette.hairline, lineWidth: 1)
             }
             .foregroundStyle(AppPalette.primaryText)
+
+            if let summary = viewModel.resolvedAIEditIntent.summary {
+                HStack(spacing: 7) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption.weight(.bold))
+                    Text(summary)
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                    Spacer(minLength: 0)
+                    Text("Exact")
+                        .font(.caption2.weight(.bold))
+                        .textCase(.uppercase)
+                }
+                .foregroundStyle(AppPalette.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(AppPalette.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityLabel("Understood edit intent: \(summary), exact")
+            }
 
             // "Powered by Apple Intelligence" badge. Sits flush under
             // the prompt so the user knows the engine behind the
@@ -2741,6 +2770,14 @@ struct ClipView: View {
                 sceneLabels: viewModel.pendingExportSceneLabels,
                 missingScenes: viewModel.pendingExportMissingScenes,
                 onSave: { viewModel.confirmPendingExport() },
+                onSaveAndOpen: { target in
+                    // Save to Photos, then open the target editor so its
+                    // "import from Photos" flow picks up the freshly
+                    // saved clips.
+                    viewModel.confirmPendingExport {
+                        target.open()
+                    }
+                },
                 onDelete: { viewModel.removePendingExportClip($0) },
                 onCancel: { viewModel.cancelPendingExport() }
             )
@@ -3698,44 +3735,39 @@ struct ClipView: View {
                 .accessibilityLabel("Clear saved clips")
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 8) {
-                    // ClipRange doesn't conform to Identifiable
-                    // (it's a value type shared with the timeline
-                    // plumbing), so we key the ForEach by a stable
-                    // composite string of its position + duration.
-                    // The displayIndex-based approach in the planned
-                    // section works because ClipRange doesn't change
-                    // underneath, but here in the saved row the
-                    // user can re-save and replace the list — so
-                    // we tie the id to the range's content instead.
-                    ForEach(Array(previewRanges.enumerated()), id: \.element.savedRowID) { displayIndex, range in
-                        savedClipTile(range: range, displayIndex: displayIndex)
-                    }
-
-                    if ranges.count > previewRanges.count {
-                        projectPlannedClipOverflowTile(extraCount: ranges.count - previewRanges.count)
-                    }
-                }
-                .padding(.vertical, 1)
-                // Match the planned-clips section's row-reorder
-                // animation — when the saved row is shuffled the
-                // tiles slide to their new positions.
-                .animation(.spring(response: 0.42, dampingFraction: 0.78), value: ranges.map(\.savedRowID))
-            }
-
             SavedClipsPlaybackStrip(
                 ranges: ranges,
-                sourceURL: viewModel.resolvedPlaybackURL(for: viewModel.sourceURL)
-            )
+                sourceURL: viewModel.resolvedPlaybackURL(for: viewModel.sourceURL),
+                onPlaybackStarted: stopPlannedClipLoop
+            ) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 8) {
+                        // ClipRange doesn't conform to Identifiable
+                        // (it's a value type shared with the timeline
+                        // plumbing), so we key the ForEach by a stable
+                        // composite string of its position + duration.
+                        // The displayIndex-based approach in the planned
+                        // section works because ClipRange doesn't change
+                        // underneath, but here in the saved row the
+                        // user can re-save and replace the list — so
+                        // we tie the id to the range's content instead.
+                        ForEach(Array(previewRanges.enumerated()), id: \.element.savedRowID) { displayIndex, range in
+                            savedClipTile(range: range, displayIndex: displayIndex)
+                        }
+
+                        if ranges.count > previewRanges.count {
+                            projectPlannedClipOverflowTile(extraCount: ranges.count - previewRanges.count)
+                        }
+                    }
+                    .padding(.vertical, 1)
+                    // Match the planned-clips section's row-reorder
+                    // animation — when the saved row is shuffled the
+                    // tiles slide to their new positions.
+                    .animation(.spring(response: 0.42, dampingFraction: 0.78), value: ranges.map(\.savedRowID))
+                }
+            }
         }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(AppPalette.accent.opacity(0.35), lineWidth: 1)
-        }
     }
 
     private func savedClipsSummaryText(

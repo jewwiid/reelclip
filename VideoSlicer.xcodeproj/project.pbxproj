@@ -67,6 +67,7 @@
 		1A2B3C4D5E6F7000000000F5 /* ReelClipProjectURLRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F6 /* ReelClipProjectURLRouter.swift */; };
 		1A2B3C4D5E6F7000000000F7 /* ReelClipProjectDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F7000000000F8 /* ReelClipProjectDocument.swift */; };
 		1A2B3C4D5E6F700000000300 /* ReelClipPhotoAlbum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000301 /* ReelClipPhotoAlbum.swift */; };
+		1A2B3C4D5E6F700000000501 /* Views/EditorTargetSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F700000000500 /* Views/EditorTargetSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -133,6 +134,7 @@
 		1A2B3C4D5E6F7000000101 /* OutroRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutroRenderer.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000D5 /* AIUsagePeriodStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIUsagePeriodStore.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000D7 /* Views/PolishKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PolishKit.swift; sourceTree = "<group>"; };
+		1A2B3C4D5E6F700000000500 /* Views/EditorTargetSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/EditorTargetSheet.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000D8 /* Views/PreviewVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/PreviewVideoView.swift; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000DD /* ReelClipProjectIcon-64.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "ReelClipProjectIcon-64.png"; sourceTree = "<group>"; };
 		1A2B3C4D5E6F7000000000DE /* ReelClipProjectIcon-128.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "ReelClipProjectIcon-128.png"; sourceTree = "<group>"; };
@@ -237,6 +239,7 @@
 				1A2B3C4D5E6F7000000000D5 /* AIUsagePeriodStore.swift */,
 				1A2B3C4D5E6F7000000000D7 /* Views/PolishKit.swift */,
 				1A2B3C4D5E6F7000000000D8 /* Views/PreviewVideoView.swift */,
+				1A2B3C4D5E6F700000000500 /* Views/EditorTargetSheet.swift */,
 			);
 			path = VideoSlicer;
 			sourceTree = "<group>";
@@ -420,6 +423,7 @@
 				1A2B3C4D5E6F7000000000D4 /* AIUsagePeriodStore.swift in Sources */,
 				1A2B3C4D5E6F7000000000D6 /* Views/PolishKit.swift in Sources */,
 				1A2B3C4D5E6F7000000000D9 /* Views/PreviewVideoView.swift in Sources */,
+				1A2B3C4D5E6F700000000501 /* Views/EditorTargetSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
