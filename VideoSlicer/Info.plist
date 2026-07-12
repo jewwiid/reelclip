@@ -75,8 +75,8 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>capcut</string>
-		<string>tiktok</string>
-		<string>instagram-stories</string>
+		<string>instagram-edits</string>
+		<string>opusclip</string>
 		<string>youtube</string>
 	</array>
 	<key>LSRequiresIPhoneOS</key>

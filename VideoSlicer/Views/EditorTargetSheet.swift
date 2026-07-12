@@ -10,8 +10,8 @@ import UIKit
 /// integration required.
 enum EditorTarget: String, CaseIterable, Identifiable {
     case capcut
-    case tiktok
-    case instagram
+    case igEdits
+    case opusClips
     case youtubeShorts
 
     var id: String { rawValue }
@@ -19,8 +19,8 @@ enum EditorTarget: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .capcut: return "CapCut"
-        case .tiktok: return "TikTok"
-        case .instagram: return "Instagram Reels"
+        case .igEdits: return "IG Edits"
+        case .opusClips: return "Opus Clips"
         case .youtubeShorts: return "YouTube Shorts"
         }
     }
@@ -30,9 +30,9 @@ enum EditorTarget: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .capcut: return "Add templates, captions, and trending sounds"
-        case .tiktok: return "Post to your TikTok with the latest video"
-        case .instagram: return "Open Reels with the latest video ready"
-        case .youtubeShorts: return "Open Shorts with the latest video ready"
+        case .igEdits: return "Open Instagram's editor with the latest video"
+        case .opusClips: return "Hand off to Opus Clips for cloud rendering"
+        case .youtubeShorts: return "Open YouTube with the latest video as a Short"
         }
     }
 
@@ -41,9 +41,9 @@ enum EditorTarget: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .capcut: return "scissors.bob.pointer"
-        case .tiktok: return "music.note.tv"
-        case .instagram: return "camera.aperture"
-        case .youtubeShorts: return "play.rectangle.on.rectangle"
+        case .igEdits: return "camera.aperture"
+        case .opusClips: return "play.rectangle.on.rectangle"
+        case .youtubeShorts: return "play.tv"
         }
     }
 
@@ -56,8 +56,8 @@ enum EditorTarget: String, CaseIterable, Identifiable {
     var urlScheme: String? {
         switch self {
         case .capcut: return "capcut://"
-        case .tiktok: return "tiktok://"
-        case .instagram: return "instagram-stories://share"
+        case .igEdits: return "instagram-edits://"
+        case .opusClips: return "opusclip://"
         case .youtubeShorts: return "youtube://"
         }
     }
