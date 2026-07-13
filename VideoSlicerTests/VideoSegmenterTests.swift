@@ -3,6 +3,113 @@
 import XCTest
 
 final class VideoSegmenterTests: XCTestCase {
+    func testStandardBuildDoesNotEnableInternalQAEntitlement() {
+        let isOverrideEnabled = SubscriptionBuildFlavor.hasInternalQAEntitlement
+        XCTAssertFalse(isOverrideEnabled)
+    }
+
+    func testFootageTitleFormatterSimplifiesDJIMimoTimestampName() {
+        XCTAssertEqual(
+            FootageTitleFormatter.projectTitle(
+                from: "dji_mi-mo_20260710_191708_20260710191452_1783709486463_video.mov"
+            ),
+            "DJI Mimo Footage - Jul 10"
+        )
+    }
+
+    func testFootageTitleFormatterKeepsDescriptiveFootageName() {
+        XCTAssertEqual(
+            FootageTitleFormatter.projectTitle(from: "birthday_party_take_1.mov"),
+            "Birthday Party Take 1"
+        )
+    }
+
+    func testFootageTitleFormatterUpgradesOnlyLegacyAutomaticTitle() {
+        XCTAssertEqual(
+            FootageTitleFormatter.upgradedLegacyTitle(
+                "dji mi-mo 20260710 191708 20260710191452 1783709486463 video",
+                sourceName: "dji_mi-mo_20260710_191708_20260710191452_1783709486463_video.mov"
+            ),
+            "DJI Mimo Footage - Jul 10"
+        )
+        XCTAssertEqual(
+            FootageTitleFormatter.upgradedLegacyTitle(
+                "My Car Vlog",
+                sourceName: "dji_mi-mo_20260710_191708_20260710191452_1783709486463_video.mov"
+            ),
+            "My Car Vlog"
+        )
+    }
+
+    @MainActor
+    func testSourceDurationLabelUsesLoadedFootageNotPlannedRecipeDuration() {
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let viewModel = VideoSplitterViewModel(mediaWorkspace: workspace)
+        viewModel.durationSeconds = 134
+
+        XCTAssertEqual(viewModel.sourceDurationLabel, "2:14")
+        XCTAssertEqual(viewModel.durationLabel, "--")
+    }
+
+    @MainActor
+    func testProjectExportOrderSurvivesSceneSnapshotAndSwitch() {
+        let root = makeTemporaryDirectory()
+        let sourceA = root.appendingPathComponent("source-a.mov")
+        try? Data().write(to: sourceA)
+
+        let now = Date(timeIntervalSince1970: 1_752_000_000)
+        let firstRange = ClipRange(startSeconds: 0, endSeconds: 3, reason: "Intro", cutMode: .fixed)
+        let secondRange = ClipRange(startSeconds: 6, endSeconds: 9, reason: "Finish", cutMode: .fixed)
+        let sceneA = MediaProjectScene(
+            name: "Scene 1",
+            sourcePath: sourceA.path,
+            sourceFileName: sourceA.lastPathComponent,
+            sourceOriginalFilename: sourceA.lastPathComponent,
+            durationSeconds: 12,
+            sourceAspectRatio: 9.0 / 16.0,
+            frameDurationSeconds: 1.0 / 30.0,
+            cutMode: .fixed,
+            segmentLengthText: "3",
+            editPrompt: "",
+            plannedRanges: [firstRange],
+            scrubPositionSeconds: 0,
+            createdAt: now,
+            updatedAt: now
+        )
+        let sceneB = MediaProjectScene(
+            name: "Scene 2",
+            // The same source avoids starting an async media swap; this test
+            // isolates the metadata snapshot performed during a scene switch.
+            sourcePath: sourceA.path,
+            sourceFileName: sourceA.lastPathComponent,
+            sourceOriginalFilename: sourceA.lastPathComponent,
+            durationSeconds: 12,
+            sourceAspectRatio: 9.0 / 16.0,
+            frameDurationSeconds: 1.0 / 30.0,
+            cutMode: .fixed,
+            segmentLengthText: "3",
+            editPrompt: "",
+            plannedRanges: [secondRange],
+            scrubPositionSeconds: 0,
+            createdAt: now,
+            updatedAt: now
+        )
+
+        let workspace = MediaWorkspace(rootDirectory: makeTemporaryDirectory())
+        let viewModel = VideoSplitterViewModel(mediaWorkspace: workspace)
+        viewModel.scenes = [sceneA, sceneB]
+        viewModel.activeSceneId = sceneA.id
+        viewModel.sourceURL = sourceA
+        viewModel.durationSeconds = 12
+        viewModel.plannedRanges = [firstRange]
+        viewModel.shuffledOrder = [1, 0]
+
+        viewModel.switchToScene(sceneB.id)
+
+        XCTAssertEqual(viewModel.shuffledOrder, [1, 0])
+        XCTAssertEqual(viewModel.orderedFlatExportClips.map(\.scene.id), [sceneB.id, sceneA.id])
+    }
+
     func testClipQueryParserParsesHyphenatedWordDurationRecipe() throws {
         let query = try XCTUnwrap(ClipQueryParser.parse("5 five-second clips every 10 seconds"))
 
@@ -199,6 +306,96 @@ final class VideoSegmenterTests: XCTestCase {
         )
 
         XCTAssertEqual(validated.count, 12)
+    }
+
+    @MainActor
+    func testRandomFixedRecipeHonorsRequestedDurationAndSpacingRanges() {
+        let ranges = VideoSplitterViewModel.randomizedFixedRanges(
+            totalDuration: 180,
+            requestedCount: 12,
+            baseDuration: 5,
+            baseInterval: 10,
+            durationRange: 2...5,
+            intervalRange: 6...10,
+            randomizeDuration: true,
+            randomizeInterval: true,
+            seed: 42
+        )
+
+        XCTAssertEqual(ranges.count, 12)
+        let durations = ranges.map(\.duration)
+        let spacings = zip(ranges, ranges.dropFirst()).map { current, next in
+            next.startSeconds - current.startSeconds
+        }
+        XCTAssertTrue(durations.allSatisfy { (2...5).contains($0) })
+        XCTAssertTrue(spacings.allSatisfy { (6...10).contains($0) })
+        XCTAssertGreaterThan(Set(durations.map { Int(($0 * 1_000).rounded()) }).count, 1)
+        XCTAssertGreaterThan(Set(spacings.map { Int(($0 * 1_000).rounded()) }).count, 1)
+    }
+
+    @MainActor
+    func testRandomFixedRecipeCompressesOnlyWhenNeededToKeepRequestedCount() {
+        let ranges = VideoSplitterViewModel.randomizedFixedRanges(
+            totalDuration: 6,
+            requestedCount: 12,
+            baseDuration: 5,
+            baseInterval: 10,
+            durationRange: 1...5,
+            intervalRange: 1...10,
+            randomizeDuration: true,
+            randomizeInterval: true,
+            seed: 42
+        )
+
+        XCTAssertEqual(ranges.count, 12)
+        XCTAssertTrue(ranges.allSatisfy { $0.duration >= 0.05 })
+        XCTAssertLessThanOrEqual(ranges.last?.endSeconds ?? .infinity, 6)
+        XCTAssertTrue(zip(ranges, ranges.dropFirst()).allSatisfy { current, next in
+            current.endSeconds <= next.startSeconds + 0.000_001
+        })
+    }
+
+    @MainActor
+    func testRandomFixedRecipeOnlyRandomizesEnabledDimensions() {
+        let ranges = VideoSplitterViewModel.randomizedFixedRanges(
+            totalDuration: 120,
+            requestedCount: 8,
+            baseDuration: 3,
+            baseInterval: 10,
+            durationRange: 1...6,
+            intervalRange: 5...12,
+            randomizeDuration: false,
+            randomizeInterval: true,
+            seed: 7
+        )
+
+        XCTAssertEqual(ranges.count, 8)
+        XCTAssertTrue(ranges.allSatisfy { abs($0.duration - 3) < 0.000_001 })
+        let spacings = zip(ranges, ranges.dropFirst()).map { current, next in
+            next.startSeconds - current.startSeconds
+        }
+        XCTAssertTrue(spacings.allSatisfy { (5...12).contains($0) })
+        XCTAssertGreaterThan(Set(spacings.map { Int(($0 * 1_000).rounded()) }).count, 1)
+    }
+
+    @MainActor
+    func testRandomFixedRecipeIsStableForLivePreviewAndCommitSeed() {
+        let makeRanges: (UInt64) -> [ClipRange] = { seed in
+            VideoSplitterViewModel.randomizedFixedRanges(
+                totalDuration: 90,
+                requestedCount: 6,
+                baseDuration: 5,
+                baseInterval: 10,
+                durationRange: 2...8,
+                intervalRange: 6...14,
+                randomizeDuration: true,
+                randomizeInterval: true,
+                seed: seed
+            )
+        }
+
+        XCTAssertEqual(makeRanges(99), makeRanges(99))
+        XCTAssertNotEqual(makeRanges(99), makeRanges(100))
     }
 
     @MainActor
@@ -1410,7 +1607,7 @@ final class VideoSegmenterTests: XCTestCase {
         XCTAssertEqual(CMTimeGetSeconds(OutroRenderer.duration), 3.0, accuracy: 0.01)
     }
 
-    func testOutroMarkIsCenteredForPortraitAndLandscapeExports() {
+    func testOutroBrandLockupIsCenteredForPortraitAndLandscapeExports() {
         for renderSize in [
             CGSize(width: 1080, height: 1920),
             CGSize(width: 1920, height: 1080)
@@ -1420,23 +1617,34 @@ final class VideoSegmenterTests: XCTestCase {
                 imageSize: CGSize(width: 834, height: 1024)
             )
 
+            let captionFrame = OutroRenderer.taglineFrame(in: renderSize, markFrame: frame)
+
             XCTAssertEqual(frame.midX, renderSize.width / 2, accuracy: 0.001)
-            XCTAssertEqual(frame.midY, renderSize.height / 2, accuracy: 0.001)
+            XCTAssertGreaterThan(captionFrame.minY, frame.maxY)
+            XCTAssertEqual(
+                (frame.minY + captionFrame.maxY) / 2,
+                renderSize.height / 2,
+                accuracy: 0.001
+            )
             XCTAssertGreaterThan(frame.width, 0)
             XCTAssertGreaterThan(frame.height, 0)
+            XCTAssertGreaterThan(captionFrame.width, 0)
+            XCTAssertGreaterThan(captionFrame.height, 0)
         }
     }
 
-    func testOutroOverlayContainsOnlyTheIconLayer() {
+    func testOutroOverlayContainsIconAndTaglineLayers() {
         let overlay = OutroRenderer.makeOverlayLayer(
             for: CGSize(width: 1280, height: 720),
             contentsScale: 2,
             overlayStartTime: .zero
         )
 
-        XCTAssertEqual(overlay.sublayers?.count, 1)
-        XCTAssertFalse(overlay.sublayers?.contains(where: { $0 is CATextLayer }) ?? true)
+        XCTAssertEqual(overlay.sublayers?.count, 2)
         XCTAssertNotNil(overlay.sublayers?.first?.contents)
+        let taglineLayer = overlay.sublayers?.compactMap { $0 as? CATextLayer }.first
+        XCTAssertEqual(taglineLayer?.string as? String, OutroRenderer.tagline)
+        XCTAssertGreaterThan(taglineLayer?.frame.width ?? 0, 0)
     }
 
     func testOutroCompositionHasThreeSecondDuration() async throws {

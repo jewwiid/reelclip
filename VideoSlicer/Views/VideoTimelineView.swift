@@ -80,6 +80,7 @@ struct VideoTimelineView: View {
         GeometryReader { outer in
             let contentWidth = timelineContentWidth(for: outer.size.width)
             let timelineSize = CGSize(width: contentWidth, height: stripHeight)
+            let isHorizontallyScrollable = contentWidth > outer.size.width + 1
 
             ScrollViewReader { scrollProxy in
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -122,7 +123,11 @@ struct VideoTimelineView: View {
                         .frame(width: contentWidth, height: stripHeight, alignment: .topLeading)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .contentShape(Rectangle())
-                        .simultaneousGesture(tapGesture(contentWidth: contentWidth))
+                        // A direct frame tap must win over the transparent
+                        // planned-range overlays. Those overlays still own
+                        // their drag gestures for editing in/out points, but
+                        // a normal tap now seeks on the first attempt.
+                        .highPriorityGesture(tapGesture(contentWidth: contentWidth))
 
                         WaveformStrip(
                             samples: waveformSamples,
@@ -155,6 +160,12 @@ struct VideoTimelineView: View {
                 // above still spans `contentWidth`, so the wider strip scrolls
                 // inside the visible window.
                 .frame(width: outer.size.width, height: totalHeight)
+                // Fit mode must be a fixed canvas. Previously this ScrollView
+                // remained active at Fit, producing an empty horizontal
+                // rubber-band even though the timeline had no overflow.
+                // Zoomed timelines retain deliberate horizontal navigation.
+                .scrollDisabled(!isHorizontallyScrollable)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                 .onChange(of: scrubPosition) { _, _ in
                     followPlayhead(
                         using: scrollProxy,

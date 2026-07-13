@@ -579,39 +579,36 @@ struct RangeInteractionView: View {
         .allowsHitTesting(true)
     }
 
-    /// Body-drag — slide the whole range without resizing. Snaps so the
-    /// resulting range stays on frame boundaries.
-    /// `minimumDistance: 4` so taps (down + up, <4pt) register as taps for
-    /// `onSelectRange`; anything ≥4pt is a scrub drag.
-    /// Body drag now scrubs the playhead within the selected
-    /// range — translating the body moves the preview's playhead
-    /// from `range.startSeconds` toward `range.endSeconds` (or
-    /// back). The edge handles above still control the range's
-    /// in/out points, so the body gesture is free to do
-    /// something more useful. We deliberately do NOT block on
-    /// `range.isLocked` — a locked clip should still be
-    /// previewable at any of its positions, and the lock only
-    /// means "don't move / resize me".
+    /// Body-drag scrubs the playhead within this range without resizing it.
+    /// The first drag also selects the range, so users do not need a separate
+    /// tap before a planned clip will respond. The edge handles above retain
+    /// exclusive ownership of the in/out points. We deliberately do NOT block
+    /// on `range.isLocked`: locking protects the edit, not playback preview.
     private func bodyDrag(width: CGFloat) -> some Gesture {
         let totalDuration = timeline.duration
         return DragGesture(minimumDistance: 4)
             .onChanged { value in
                 guard let scrub = onScrub,
-                      isSelected,
                       totalDuration.isFinite,
                       totalDuration > 0,
                       width.isFinite,
                       width > 0
                 else { return }
-                if scrubDragBase == nil { scrubDragBase = range.startSeconds }
+                let rangeDuration = range.endSeconds - range.startSeconds
+                let bodyWidth = width * CGFloat(rangeDuration / totalDuration)
+                guard rangeDuration > 0, bodyWidth > 0 else { return }
+
+                if scrubDragBase == nil {
+                    // `startLocation` is local to the transparent range body,
+                    // so it maps directly to the position the user touched.
+                    // Starting there avoids a visible jump back to the range
+                    // start on the first scrub frame.
+                    let touchRatio = min(max(value.startLocation.x / bodyWidth, 0), 1)
+                    scrubDragBase = range.startSeconds + Double(touchRatio) * rangeDuration
+                    onSelectRange?(index)
+                }
                 guard let baseSeconds = scrubDragBase else { return }
-                // Map drag distance to source seconds. The body
-                // spans `range.endSeconds - range.startSeconds`
-                // horizontally; translating the full width of the
-                // body moves the playhead across the whole range.
-                let bodyWidth = width * CGFloat((range.endSeconds - range.startSeconds) / totalDuration)
-                guard bodyWidth > 0 else { return }
-                let delta = Double(value.translation.width / bodyWidth) * (range.endSeconds - range.startSeconds)
+                let delta = Double(value.translation.width / bodyWidth) * rangeDuration
                 let proposed = baseSeconds + delta
                 let clamped = min(max(proposed, range.startSeconds), range.endSeconds)
                 scrub(clamped)
@@ -624,7 +621,7 @@ struct RangeInteractionView: View {
     // Per-side handle so the start handle mirrors its grab lines to face the
     // range interior (drag-left to trim earlier, drag-right to trim later).
     private func trimHandle(isStart: Bool) -> some View {
-        TrimHandleShape(mirrored: isStart)
+        TrimHandleShape()
     }
 
     private func startHandleDrag(width: CGFloat) -> some Gesture {
@@ -715,16 +712,14 @@ struct RangeInteractionView: View {
 /// border and three short horizontal grab lines. When `mirrored` is true the
 /// grab lines face left (start handle), otherwise they face right (end handle).
 private struct TrimHandleShape: View {
-    var mirrored: Bool = false
-
     var body: some View {
-        ReelClipRangeHandle(
-            width: 6,
-            height: 22,
-            mirrored: mirrored,
-            gripLineCount: 3,
-            isInteractive: false
-        )
+        Capsule()
+            .fill(AppPalette.primaryText)
+            .frame(width: 6, height: 22)
+            .overlay {
+                Capsule()
+                    .stroke(AppPalette.hairline, lineWidth: 1)
+            }
     }
 }
 
@@ -937,13 +932,13 @@ struct EditableClipRangeBar: View {
                         .gesture(bodyScrubDrag(width: width, totalDuration: totalDuration, selectedStartX: selectedStartX, selectedEndX: selectedEndX))
                 }
 
-                rowTrimHandle(isStart: true)
+                rowTrimHandle()
                     .frame(width: handleVisibleWidth, height: handleHeight)
                     .offset(x: min(max(startX - handleVisibleWidth / 2, 0), width - handleVisibleWidth))
                     .allowsHitTesting(false)
                     .zIndex(2)
 
-                rowTrimHandle(isStart: false)
+                rowTrimHandle()
                     .frame(width: handleVisibleWidth, height: handleHeight)
                     .offset(x: min(max(endX - handleVisibleWidth / 2, 0), width - handleVisibleWidth))
                     .allowsHitTesting(false)
@@ -979,14 +974,14 @@ struct EditableClipRangeBar: View {
         .accessibilityLabel("Trim range \(ClipRangeFormatter.title(for: range))")
     }
 
-    private func rowTrimHandle(isStart: Bool) -> some View {
-        ReelClipRangeHandle(
-            width: 6,
-            height: 22,
-            mirrored: isStart,
-            gripLineCount: 2,
-            isInteractive: false
-        )
+    private func rowTrimHandle() -> some View {
+        Capsule()
+            .fill(AppPalette.primaryText)
+            .frame(width: 6, height: 22)
+            .overlay {
+                Capsule()
+                    .stroke(AppPalette.hairline, lineWidth: 1)
+            }
     }
 
     private func startHandleDrag(totalDuration: Double, width: CGFloat) -> some Gesture {

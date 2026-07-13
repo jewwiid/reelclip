@@ -331,33 +331,14 @@ private struct RecipeRandomRangeSlider: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
-            ReelClipRangeSlider(
-                lowerValue: $lowerValue,
-                upperValue: $upperValue,
-                bounds: bounds,
-                minimumGap: minimumGap,
-                step: 1
-            )
-
-            HStack(spacing: 8) {
-                valueEditorButton(
-                    handle: .lower,
-                    label: "Min",
-                    value: lowerDisplay
-                )
-                Spacer(minLength: 8)
-                valueEditorButton(
-                    handle: .upper,
-                    label: "Max",
-                    value: upperDisplay
-                )
-            }
+        VStack(spacing: 8) {
+            nativeSliderRow(handle: .lower, label: "Min", value: lowerDisplay)
+            nativeSliderRow(handle: .upper, label: "Max", value: upperDisplay)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(title) random range")
         .accessibilityValue("\(RecipeDurationFormatter.format(lowerDisplay)) to \(RecipeDurationFormatter.format(upperDisplay))")
-        .accessibilityHint("Drag the left or right handle to set the minimum and maximum random value.")
+        .accessibilityHint("Adjust the minimum and maximum random values.")
         .alert(editingTitle, isPresented: editingBinding) {
             TextField("Seconds", text: $editingText)
                 .keyboardType(.decimalPad)
@@ -392,6 +373,39 @@ private struct RecipeRandomRangeSlider: View {
         case nil:
             return "Random value"
         }
+    }
+
+    private func nativeSliderRow(handle: Handle, label: String, value: Double) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(AppPalette.secondaryText)
+                .frame(width: 28, alignment: .leading)
+
+            Slider(
+                value: sliderBinding(for: handle),
+                in: bounds,
+                step: 1
+            )
+            .tint(AppPalette.accent)
+            .controlSize(.regular)
+            .accessibilityLabel("\(label) random \(title)")
+            .accessibilityValue(RecipeDurationFormatter.format(value))
+
+            valueEditorButton(handle: handle, label: label, value: value)
+        }
+    }
+
+    private func sliderBinding(for handle: Handle) -> Binding<Double> {
+        Binding(
+            get: {
+                switch handle {
+                case .lower: return lowerDisplay
+                case .upper: return upperDisplay
+                }
+            },
+            set: { update(handle, to: $0.rounded()) }
+        )
     }
 
     private func valueEditorButton(handle: Handle, label: String, value: Double) -> some View {

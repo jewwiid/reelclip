@@ -14,13 +14,13 @@ exports are completely clean — no outro, no overlay, no branding of any kind.
 ## What the outro renders
 
 A 3-second animated bumper composited onto a solid black background. It uses
-only the transparent ReelClip icon mark, with no headline, handle, app-icon
-tile, or other overlay:
+the transparent ReelClip icon mark with the caption "Cut with ReelClip" below
+it. There is no headline, handle, app-icon tile, or other overlay:
 
 | Time          | Element                                            |
 |---------------|----------------------------------------------------|
-| 0.00 – 0.40 s | Icon mark fades + scales 0.72 → 1.0 (ease-out)     |
-| 0.40 – 2.70 s | Centred icon mark holds                            |
+| 0.00 – 0.40 s | Icon mark scales 0.72 → 1.0; mark + caption fade in |
+| 0.40 – 2.70 s | Centred icon-mark and caption lockup holds          |
 | 2.70 – 3.00 s | Whole group fades out                              |
 
 Logo: `LogoMark` from the asset catalog. It is the transparent icon artwork
@@ -52,7 +52,7 @@ rate — no letterboxing, no resampling.
    video track with a real frame sequence, which avoids unreliable single-frame
    stretching across export presets.
 2. A matching `AVMutableVideoComposition` with a `CoreAnimationTool` that
-   composites the centred icon-mark layer on top of those frames.
+   composites the centred icon-mark and caption layers on top of those frames.
 
 `VideoSegmenter.appendOutro(to:in:index:)` then:
 
@@ -84,8 +84,8 @@ whole export.
 Added to `VideoSegmenterTests`:
 
 - `testOutroDurationConstantIsThreeSeconds` — sanity check on `OutroRenderer.duration`
-- `testOutroMarkIsCenteredForPortraitAndLandscapeExports` — mark stays centred
-- `testOutroOverlayContainsOnlyTheIconLayer` — no text/tile layers and asset loads
+- `testOutroBrandLockupIsCenteredForPortraitAndLandscapeExports` — the icon + caption stay centred
+- `testOutroOverlayContainsIconAndTaglineLayers` — the icon asset and exact caption both load
 - `testOutroCompositionHasThreeSecondDuration` — composition reports 3 s
 - `testShouldAppendOutroIsTrueForFreeTier` — gate returns `true` for `.free`
 - `testShouldAppendOutroIsFalseForCreatorTier` — gate returns `false` for `.creator`
@@ -95,7 +95,7 @@ Added to `VideoSegmenterTests`:
 ## Tier-mapping rationale
 
 - **Free**: the outro is the entire branding surface. Showing both a corner
-  pill and a 3-second outro would be redundant. The centred icon mark keeps the
+ pill and a 3-second outro would be redundant. The centred icon mark and caption keep the
   branding clear without covering the user's footage.
 - **Creator**: paid users paid to remove watermarks. Layering *any* branding
   on their clips breaks the contract. Clean export is the deliverable.

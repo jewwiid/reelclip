@@ -5,6 +5,7 @@ struct SettingsView: View {
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @State private var showPaywall: Bool = false
     @State private var isFeedbackPresented = false
+    @AppStorage("onboarding.completed") private var hasCompletedOnboarding = false
 
     var body: some View {
         NavigationStack {
@@ -31,6 +32,7 @@ struct SettingsView: View {
                         // bring-your-own-key path.
                         aiRuntimeCard
                         clipDefaultsCard
+                        onboardingCard
                         feedbackCard
                     }
                     .padding(18)
@@ -149,6 +151,42 @@ struct SettingsView: View {
                     .frame(height: 46)
                     .foregroundStyle(AppPalette.background)
                     .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .polishPressFeedback()
+        }
+        .premiumSurface()
+    }
+
+    private var onboardingCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 11) {
+                Image(systemName: "rectangle.portrait.on.rectangle.portrait.angled")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppPalette.accent)
+                    .frame(width: 32, height: 32)
+                    .background(AppPalette.accent.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Getting started")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppPalette.primaryText)
+                    Text("Replay the ReelClip walkthrough")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
+            }
+
+            Button {
+                PolishKit.Haptics.tap(.light).play()
+                hasCompletedOnboarding = false
+            } label: {
+                Label("Show onboarding", systemImage: "arrow.counterclockwise")
+                    .font(.subheadline.weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .foregroundStyle(AppPalette.primaryText)
+                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .buttonStyle(.plain)
             .polishPressFeedback()
@@ -491,6 +529,16 @@ struct SettingsView: View {
                 .font(.subheadline)
                 .foregroundStyle(AppPalette.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if SubscriptionStore.isUsingInternalQATierOverride {
+                Label("Internal QA access. StoreKit purchases are not being tested in this build.", systemImage: "testtube.2")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppPalette.accent)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppPalette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(subscriptionBenefitsTitle)

@@ -2,6 +2,18 @@ import StoreKit
 import Foundation
 import Combine
 
+/// Build-scoped entitlement state. Kept out of `SubscriptionStore`'s main
+/// actor so standard-build tests can independently verify the compiler gate.
+enum SubscriptionBuildFlavor {
+    static let hasInternalQAEntitlement: Bool = {
+        #if REELCLIP_INTERNAL_QA
+        return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+        #else
+        return false
+        #endif
+    }()
+}
+
 /// Wraps App Store Connect auto-renewing subscriptions for ReelClip.
 ///
 /// Product identifiers are declared in App Store Connect under
@@ -54,7 +66,13 @@ final class SubscriptionStore: ObservableObject {
         ProductID.creatorLifetime.rawValue
     ]
 
-    @Published private(set) var tier: Tier = .free
+    /// Internal-only Creator entitlement for a separately compiled QA
+    /// archive. The compiler condition is absent from ordinary Release and
+    /// App Store builds; the sandbox receipt check means it also stays off
+    /// if a QA archive is ever distributed through the production store.
+    static let isUsingInternalQATierOverride = SubscriptionBuildFlavor.hasInternalQAEntitlement
+
+    @Published private(set) var tier: Tier = isUsingInternalQATierOverride ? .creator : .free
     @Published private(set) var products: [Product] = []
     @Published private(set) var missingProductIDs: Set<String> = []
     @Published private(set) var isLoading: Bool = false
@@ -160,7 +178,11 @@ final class SubscriptionStore: ObservableObject {
     /// StoreKit receives renewals, restores, refunds, and revocations through
     /// its local entitlement APIs and transaction update stream.
     private func refreshTier() async {
-        tier = await localStoreKitTier()
+        if Self.isUsingInternalQATierOverride {
+            tier = .creator
+        } else {
+            tier = await localStoreKitTier()
+        }
     }
 
     /// Walk StoreKit 2's `currentEntitlements` and pick the highest tier

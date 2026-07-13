@@ -42,6 +42,15 @@ enum ExportTarget: Hashable {
     case allScenes
 }
 
+/// Determines what happens after ReelClip has rendered an export queue.
+/// Reviewing is the default so a user can remove a rendered clip before it
+/// reaches Photos. The direct route is intentionally an explicit secondary
+/// action exposed from the project queue's long-press menu.
+enum ExportDelivery: Hashable {
+    case review
+    case saveToPhotos
+}
+
 enum SceneSourceReplacementPlanAction {
     case keep
     case clamp
@@ -899,6 +908,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
         rerollFixedModeRandomSeed()
         invalidateRecipePreview(status: enabled ? "Randomizing clip duration." : "Previewing fixed clip recipe.")
+        persistCurrentProject()
     }
 
     func setFixedModeRandomInterval(_ enabled: Bool) {
@@ -909,6 +919,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
         rerollFixedModeRandomSeed()
         invalidateRecipePreview(status: enabled ? "Randomizing spacing." : "Previewing fixed clip recipe.")
+        persistCurrentProject()
     }
 
     func setFixedModeRandomDurationMinimum(_ seconds: Double) {
@@ -1444,9 +1455,17 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         guard id != activeSceneId,
               let scene = scenes.first(where: { $0.id == id }) else { return }
 
+        // Loading another scene replaces the editor's local
+        // `plannedRanges`, but does not alter the project queue itself.
+        // Preserve a valid project-level order across that view-state swap.
+        let orderBeforeSceneSwitch = shuffledOrder
         saveCurrentStateIntoSceneList(updatedAt: Date())
         activeSceneId = id
         applyScene(scene)
+        shuffledOrder = Self.validatedPermutation(
+            orderBeforeSceneSwitch,
+            count: flatExportClips.count
+        )
         statusMessage = "Restored \(scene.name)."
         persistCurrentProject()
     }
@@ -1672,7 +1691,18 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         // rows in the Planned clips section below. Falls back to
         // "--" when the user hasn't planned anything in this mode
         // yet, so the tile reads cleanly before any work is done.
-        let currentModeRanges = plannedRangesForCurrentMode
+        let currentModeRanges: [ClipRange]
+        if cutMode == .fixed,
+           let durationSeconds,
+           durationSeconds.isFinite,
+           durationSeconds > 0 {
+            // Fixed recipes are edited live. Use the same seeded materialized
+            // plan as the timeline and Add action so random duration changes
+            // immediately update this total instead of showing an older plan.
+            currentModeRanges = fixedModeRanges(forSourceDuration: durationSeconds)
+        } else {
+            currentModeRanges = plannedRangesForCurrentMode
+        }
         if currentModeRanges.isEmpty,
            cutMode == .aiAssist,
            let expectedTotalDuration = resolvedAIEditIntent.expectedTotalDuration {
@@ -1842,6 +1872,19 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         Self.formatDuration(scrubPositionSeconds)
     }
 
+    /// The loaded footage length. This deliberately does not reuse
+    /// `durationLabel`, which reports the active recipe's planned-output
+    /// length and is correctly empty before the user has planned clips.
+    var sourceDurationLabel: String {
+        guard let durationSeconds,
+              durationSeconds.isFinite,
+              durationSeconds > 0
+        else {
+            return "--"
+        }
+        return Self.formatDuration(durationSeconds)
+    }
+
     var frameSnapLabel: String {
         guard frameDurationSeconds.isFinite, frameDurationSeconds > 0 else { return "frame snap" }
         let rawFrameRate = (1.0 / frameDurationSeconds).rounded()
@@ -1953,6 +1996,51 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                 sourceName: sourceName,
                 canDiscardPreparedSource: canDiscardPreparedSource,
                 trimRange: trimRange,
+                importID: importID
+            )
+        }
+    }
+
+    /// Installs a source that has already completed the shared import and
+    /// optional trim flow into only the active scene. This deliberately does
+    /// not reset the project or create another scene: adding source media to
+    /// Scene 2 must preserve Scene 1's source, recipe, and export plan.
+    func importPreparedSceneSource(
+        from url: URL,
+        photoLibraryIdentifier: String?,
+        sourceName: String,
+        canDiscardPreparedSource: Bool,
+        trimRange: ClipRange?,
+        planAction: SceneSourceReplacementPlanAction,
+        expectedSceneID: UUID
+    ) {
+        guard hasOpenProjectContext,
+              activeSceneId == expectedSceneID else {
+            if canDiscardPreparedSource {
+                discardPreparedImport(at: url)
+            }
+            errorMessage = "The active scene changed before this video could be imported."
+            return
+        }
+        guard let importID = beginMediaImport(
+            status: trimRange == nil ? "Loading scene source..." : "Trimming selected scene section..."
+        ) else {
+            return
+        }
+
+        cancelProcessing(updateStatus: false)
+        previewTask?.cancel()
+        waveformTask?.cancel()
+
+        mediaImportTask = Task {
+            await loadPreparedSceneSource(
+                from: url,
+                photoLibraryIdentifier: photoLibraryIdentifier,
+                sourceName: sourceName,
+                canDiscardPreparedSource: canDiscardPreparedSource,
+                trimRange: trimRange,
+                planAction: planAction,
+                expectedSceneID: expectedSceneID,
                 importID: importID
             )
         }
@@ -3370,14 +3458,10 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     func exportPreparedClips() {
-        // Convenience: if clips are already rendered (re-opening a project), skip
-        // the preview step and save straight to Photos. New exports go through
-        // prepareExport() instead so the user can review first.
-        guard !clips.isEmpty else {
-            prepareExport(target: .activeRecipe)
-            return
-        }
-        confirmPendingExport()
+        // A previous render must never silently turn the next Export tap into
+        // a Photos save. Always render the currently selected plan and show the
+        // review queue; saving to Photos remains a deliberate final action.
+        prepareExport(target: .activeRecipe)
     }
 
     /// Transcript pane "Process" action. Runs silence detection on the
@@ -3708,9 +3792,23 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     /// in-memory source swap), so per-scene source video (Phase 4) is
     /// respected. Missing-source scenes are skipped with a status
     /// message rather than failing the whole export.
-    func prepareExport(target: ExportTarget = .activeScene) {
+    func prepareExport(
+        target: ExportTarget = .activeScene,
+        delivery: ExportDelivery = .review
+    ) {
         exportTarget = target
+
+        // `saveCurrentStateIntoSceneList` writes a fresh active-scene snapshot.
+        // That update is not a clip insertion, deletion, or reorder, but the
+        // published scene write used to clear this index permutation before the
+        // export plan was read. Capture and restore a still-valid order so the
+        // preview and rendered files honour the order shown in the project row.
+        let orderBeforeSceneSnapshot = shuffledOrder
         saveCurrentStateIntoSceneList(updatedAt: Date())
+        shuffledOrder = Self.validatedPermutation(
+            orderBeforeSceneSnapshot,
+            count: flatExportClips.count
+        )
         let flatExportPlan = flatExportClips(for: target)
         let usesShuffledOrder = target == .allScenes && isShuffled
         let tierSnapshot = currentTier
@@ -3937,6 +4035,29 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
                     let skipped = missing.map(\.displayText).joined(separator: ", ")
                     statusMessage = "No clips rendered. \(missing.isEmpty ? "" : "Skipped: \(skipped).")"
                     isShowingExportPreview = false
+                } else if delivery == .saveToPhotos {
+                    isShowingExportPreview = false
+                    do {
+                        try await saveRenderedClipsToPhotoLibrary(
+                            aggregated,
+                            projectTitle: exportProjectTitle
+                        )
+                    } catch is CancellationError {
+                        statusMessage = "Save cancelled."
+                    } catch VideoSegmenterError.cancelled {
+                        statusMessage = "Save cancelled."
+                    } catch {
+                        errorMessage = error.localizedDescription
+                        statusMessage = "Could not save to Photos. Review the rendered clips and try again."
+                        // Keep the rendered files and surface the regular
+                        // review sheet so a failed direct save never requires
+                        // a costly second render.
+                        isShowingExportPreview = true
+                        await exportNotifications.notifyExportFailed(
+                            projectTitle: exportProjectTitle,
+                            message: error.localizedDescription
+                        )
+                    }
                 } else {
                     let suffix = missing.isEmpty
                         ? ""
@@ -4039,26 +4160,13 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             guard let self else { return }
 
             processingPhase = .saving
-            statusMessage = "Saving clips to Photos..."
             isShowingExportPreview = false
 
             do {
-                let photoLibraryIdentifiers = try await segmenter.saveToPhotoLibrary(pending) { [weak self] value in
-                    self?.progress = value
-                }
-                let saved = pending.map { clip in
-                    clip.withPhotoLibraryLocalIdentifier(photoLibraryIdentifiers[clip.id])
-                }
-                clips = saved
-                pendingExportClips = nil
-                pendingExportSceneLabels = [:]
-                pendingExportMissingScenes = []
-                statusMessage = "Saved \(saved.count) clips to Photos. Tap a clip to share."
-                await exportNotifications.notifyExportCompleted(
-                    clipCount: saved.count,
+                try await saveRenderedClipsToPhotoLibrary(
+                    pending,
                     projectTitle: exportProjectTitle
                 )
-                persistCurrentProject()
                 if let completion {
                     await MainActor.run { completion() }
                 }
@@ -4078,6 +4186,35 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             processingPhase = .idle
             processingTask = nil
         }
+    }
+
+    /// Writes an already-rendered queue to Photos and promotes the results to
+    /// the project's completed-output list. Kept separate from the UI action so
+    /// both the review sheet and the explicit "render and save" route use the
+    /// exact same ordering and persistence behaviour.
+    private func saveRenderedClipsToPhotoLibrary(
+        _ pending: [SegmentOutput],
+        projectTitle: String
+    ) async throws {
+        processingPhase = .saving
+        progress = 0
+        statusMessage = "Saving clips to Photos..."
+        let photoLibraryIdentifiers = try await segmenter.saveToPhotoLibrary(pending) { [weak self] value in
+            self?.progress = value
+        }
+        let saved = pending.map { clip in
+            clip.withPhotoLibraryLocalIdentifier(photoLibraryIdentifiers[clip.id])
+        }
+        clips = saved
+        pendingExportClips = nil
+        pendingExportSceneLabels = [:]
+        pendingExportMissingScenes = []
+        statusMessage = "Saved \(saved.count) clips to Photos. Tap a clip to share."
+        await exportNotifications.notifyExportCompleted(
+            clipCount: saved.count,
+            projectTitle: projectTitle
+        )
+        persistCurrentProject()
     }
 
     func removePendingExportClip(_ clip: SegmentOutput) {
@@ -4610,6 +4747,125 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         processingPhase = .idle
     }
 
+    /// Scene-scoped equivalent of `loadPreparedVideoFile`. The candidate
+    /// source was already materialized by `SourceImportPreparation`; this
+    /// method optionally renders the chosen in/out range, then binds the
+    /// result to the scene that initiated the import. An error leaves that
+    /// scene's existing source intact.
+    private func loadPreparedSceneSource(
+        from url: URL,
+        photoLibraryIdentifier: String?,
+        sourceName: String,
+        canDiscardPreparedSource: Bool,
+        trimRange: ClipRange?,
+        planAction: SceneSourceReplacementPlanAction,
+        expectedSceneID: UUID,
+        importID: UUID
+    ) async {
+        defer { finishMediaImport(importID) }
+        var shouldDiscardPreparedSource = trimRange != nil && canDiscardPreparedSource
+        var createdTrimSource: ImportedSourceCopy?
+        defer {
+            if shouldDiscardPreparedSource {
+                mediaWorkspace.removeImportedSource(at: url)
+            }
+        }
+
+        processingPhase = .loading
+        progress = 0
+        errorMessage = nil
+
+        do {
+            guard !Task.isCancelled else {
+                statusMessage = "Scene source import cancelled."
+                processingPhase = .idle
+                return
+            }
+
+            let finalURL: URL
+            if let trimRange {
+                let sourceDuration = try await segmenter.duration(for: url)
+                let start = min(max(trimRange.startSeconds, 0), sourceDuration)
+                let end = min(max(trimRange.endSeconds, 0), sourceDuration)
+                guard end - start > 0.05 else {
+                    throw NSError(
+                        domain: "SceneSourceImport",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "Select a section longer than one video frame."]
+                    )
+                }
+                try MediaProcessingLimits.validateSourceDuration(end - start, for: currentTier)
+
+                let sourceBytes = mediaWorkspace.fileSize(at: url)
+                let selectedRatio = min(max((end - start) / sourceDuration, 0), 1)
+                let estimatedTrimBytes = Int64((Double(sourceBytes) * selectedRatio).rounded(.up))
+                let trimCapacity = estimatedTrimBytes.multipliedReportingOverflow(by: 2)
+                try mediaWorkspace.validateAvailableCapacity(
+                    additionalBytes: trimCapacity.overflow ? Int64.max : trimCapacity.partialValue
+                )
+
+                let rendered = try await segmenter.renderSourceTrim(
+                    sourceURL: url,
+                    range: ClipRange(startSeconds: start, endSeconds: end),
+                    progress: { [weak self] value in
+                        self?.progress = min(max(value, 0), 1)
+                    }
+                )
+                defer { mediaWorkspace.removeDirectories(for: [rendered]) }
+                let importedTrim = try mediaWorkspace.importSourceCopyResult(from: rendered.url)
+                createdTrimSource = importedTrim
+                finalURL = importedTrim.url
+            } else {
+                finalURL = url
+            }
+
+            guard activeSceneId == expectedSceneID else {
+                throw NSError(
+                    domain: "SceneSourceImport",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "The active scene changed before this video could be imported."]
+                )
+            }
+
+            try await installSourceForActiveScene(
+                url: finalURL,
+                photoLibraryIdentifier: trimRange == nil ? photoLibraryIdentifier : nil,
+                planAction: planAction
+            )
+            if finalURL.standardizedFileURL == url.standardizedFileURL {
+                shouldDiscardPreparedSource = false
+            }
+
+            if let sceneIndex = scenes.firstIndex(where: { $0.id == expectedSceneID }) {
+                scenes[sceneIndex].sourceOriginalFilename = sourceName
+                scenes[sceneIndex].updatedAt = Date()
+            }
+            persistCurrentProject()
+            statusMessage = trimRange == nil
+                ? "Scene source updated. Ready to analyze cuts."
+                : "Selected section imported into this scene. Ready to analyze cuts."
+        } catch is CancellationError {
+            if trimRange == nil, canDiscardPreparedSource {
+                mediaWorkspace.removeImportedSource(at: url)
+            }
+            if let createdTrimSource, createdTrimSource.wasCreated {
+                mediaWorkspace.removeImportedSource(at: createdTrimSource.url)
+            }
+            statusMessage = "Scene source import cancelled."
+        } catch {
+            if trimRange == nil, canDiscardPreparedSource {
+                mediaWorkspace.removeImportedSource(at: url)
+            }
+            if let createdTrimSource, createdTrimSource.wasCreated {
+                mediaWorkspace.removeImportedSource(at: createdTrimSource.url)
+            }
+            errorMessage = error.localizedDescription
+            statusMessage = "Could not update scene source."
+        }
+
+        processingPhase = .idle
+    }
+
     private func resetLoadedMediaState(keepSource: Bool) {
         if !keepSource {
             resetPlaybackMedia()
@@ -4792,7 +5048,17 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
 
         resetLoadedMediaState(keepSource: false)
         currentProjectID = project.id
-        projectTitleDraft = project.title
+        let sourceName = project.activeScene?.sourceOriginalFilename
+            ?? project.activeScene?.sourceFileName
+            ?? project.sourceFileName
+        let resolvedProjectTitle = FootageTitleFormatter.upgradedLegacyTitle(
+            project.title,
+            sourceName: sourceName
+        )
+        projectTitleDraft = resolvedProjectTitle
+        if resolvedProjectTitle != project.title {
+            applyProjectTitleChange(resolvedProjectTitle)
+        }
         if !activeSceneIsBlank {
             sourceURL = project.sourceURL
             durationSeconds = project.durationSeconds
@@ -4974,6 +5240,11 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     private func saveCurrentStateIntoSceneList(updatedAt: Date) {
+        // Refreshing the active scene's metadata must not change the project's
+        // export queue. Keep a valid custom permutation across this write;
+        // actual clip inserts, removals, or scene reorders still invalidate it
+        // through their normal mutation paths.
+        let orderBeforeSnapshot = shuffledOrder
         let existingScene: MediaProjectScene?
         if let activeSceneId {
             existingScene = scenes.first(where: { $0.id == activeSceneId })
@@ -4994,6 +5265,10 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
             scenes.append(snapshot)
         }
         activeSceneId = snapshot.id
+        shuffledOrder = Self.validatedPermutation(
+            orderBeforeSnapshot,
+            count: flatExportClips.count
+        )
     }
 
     private func currentSceneSnapshot(
@@ -5907,34 +6182,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
     }
 
     private static func defaultProjectTitle(forSourceName sourceName: String) -> String {
-        let fileStem = URL(fileURLWithPath: sourceName).deletingPathExtension().lastPathComponent
-        let sourceTitle = stripImportedSourcePrefix(from: fileStem)
-        let title = normalizedDefaultProjectTitle(from: sourceTitle)
-
-        return title.isEmpty ? "Untitled project" : title
-    }
-
-    private static func stripImportedSourcePrefix(from fileStem: String) -> String {
-        var title = fileStem
-        let components = title.components(separatedBy: "-")
-
-        if components.count > 7,
-           components[0].count == 8,
-           components[1].count == 6 {
-            let uuidCandidate = components[2...6].joined(separator: "-")
-            if UUID(uuidString: uuidCandidate) != nil {
-                title = components[7...].joined(separator: "-")
-            }
-        }
-
-        return title
-    }
-
-    private static func normalizedDefaultProjectTitle(from rawTitle: String) -> String {
-        FilenameSanitizer.sanitize(rawTitle, fallback: "")
-            .replacingOccurrences(of: "_+", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: " ._-"))
+        FootageTitleFormatter.projectTitle(from: sourceName)
     }
 
     private static func fixedRanges(
@@ -5981,7 +6229,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         }
     }
 
-    private static func randomizedFixedRanges(
+    static func randomizedFixedRanges(
         totalDuration: Double,
         requestedCount: Int,
         baseDuration: Int,
@@ -5996,7 +6244,7 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         let count = min(max(requestedCount, 1), MediaProcessingLimits.maximumPlannedClips)
         let anchorDuration = min(max(Double(baseDuration), 0.1), totalDuration)
         let anchorInterval = min(max(Double(baseInterval), 0.1), totalDuration)
-        let minimumDuration = min(1.0, totalDuration)
+        let minimumDuration = min(0.05, totalDuration)
         var generator = FixedRecipeRandomGenerator(seed: seed)
 
         return boundedRandomFixedRanges(
@@ -6025,40 +6273,54 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         randomizeInterval: Bool,
         generator: inout FixedRecipeRandomGenerator
     ) -> [ClipRange] {
-        // Honour the user's count as the source of truth. When a count is
-        // requested, scale the per-clip span to `totalDuration / count` so
-        // the user always gets exactly the count they asked for. The random
-        // range acts as a preference — the algorithm can drop below the
-        // configured lower bound to fit the count, and the very last clip
-        // may be shorter than the rest to consume the trailing source.
-        // No count, no cap: walk until the source is consumed (subject to
-        // the configured bounds).
+        // Count is the source of truth. Keep the user's random bounds intact
+        // whenever they fit, and only compress their lower bounds when the
+        // requested count is otherwise impossible for the source duration.
         let count = max(1, requestedCount)
-        let perClip = totalDuration / Double(count)
-        let spanFloor = max(minimumDuration, min(perClip, totalDuration))
+        guard totalDuration >= Double(count) * minimumDuration else { return [] }
 
-        let durationBounds = normalizedRandomRange(
+        let requestedDurationBounds = normalizedRandomRange(
             durationRange,
-            fallback: perClip,
-            minimum: spanFloor,
+            fallback: anchorDuration,
+            minimum: minimumDuration,
             maximum: totalDuration
         )
-        let intervalBounds = normalizedRandomRange(
+        let requestedIntervalBounds = normalizedRandomRange(
             intervalRange,
-            fallback: perClip,
-            minimum: spanFloor,
+            fallback: anchorInterval,
+            minimum: minimumDuration,
             maximum: totalDuration
         )
-        let durationLower = randomizeDuration
-            ? min(durationBounds.lowerBound, perClip)
-            : min(max(anchorDuration, spanFloor), totalDuration)
-        let durationUpper = randomizeDuration ? durationBounds.upperBound : durationLower
-        let intervalLower = randomizeInterval
-            ? min(intervalBounds.lowerBound, perClip)
-            : min(max(anchorInterval, spanFloor), totalDuration)
-        let intervalUpper = randomizeInterval ? intervalBounds.upperBound : intervalLower
+
+        let requestedDurationLower = randomizeDuration
+            ? requestedDurationBounds.lowerBound
+            : min(max(anchorDuration, minimumDuration), totalDuration)
+        let requestedDurationUpper = randomizeDuration
+            ? requestedDurationBounds.upperBound
+            : requestedDurationLower
+        let requestedIntervalLower = randomizeInterval
+            ? requestedIntervalBounds.lowerBound
+            : min(max(anchorInterval, minimumDuration), totalDuration)
+        let requestedIntervalUpper = randomizeInterval
+            ? requestedIntervalBounds.upperBound
+            : requestedIntervalLower
+
+        let requestedMinimumStep = max(requestedDurationLower, requestedIntervalLower)
+        let requestedMinimumTotal = requestedDurationLower
+            + Double(count - 1) * requestedMinimumStep
+        let fitStep = totalDuration / Double(count)
+        let mustCompress = requestedMinimumTotal > totalDuration
+
+        let durationLower = mustCompress
+            ? max(minimumDuration, min(requestedDurationLower, fitStep))
+            : requestedDurationLower
+        let intervalLower = mustCompress
+            ? max(minimumDuration, min(requestedIntervalLower, fitStep))
+            : requestedIntervalLower
+        let durationUpper = randomizeDuration ? requestedDurationUpper : durationLower
+        let intervalUpper = randomizeInterval ? requestedIntervalUpper : intervalLower
         let minimumStep = max(durationLower, intervalLower)
-        guard minimumStep > 0, totalDuration >= minimumDuration else { return [] }
+        guard minimumStep > 0 else { return [] }
 
         var ranges: [ClipRange] = []
         var start = 0.0
@@ -6066,37 +6328,32 @@ final class VideoSplitterViewModel: ObservableObject, ReelClipProjectImportSink 
         for index in 0..<count {
             guard start < totalDuration else { break }
             let clipsLeftAfterThis = count - index - 1
-            let maxSpan = totalDuration - start - Double(clipsLeftAfterThis) * minimumStep
-            // Allow the last clip to be shorter than `durationLower` (down
-            // to `minimumDuration`) so the user's count is honoured even
-            // when the source can't fit evenly-spaced full-size clips.
-            guard maxSpan >= minimumDuration else { break }
+            let minimumTailAfterNextStart = clipsLeftAfterThis > 0
+                ? Double(clipsLeftAfterThis - 1) * minimumStep + durationLower
+                : 0
+            let maxValueForFit = totalDuration - start - minimumTailAfterNextStart
+            guard maxValueForFit >= durationLower else { break }
 
             let span: Double
             if randomizeDuration {
-                let effectiveLower = min(durationLower, maxSpan)
-                let upper = max(effectiveLower, min(durationUpper, maxSpan))
-                span = Double.random(in: effectiveLower...upper, using: &generator)
+                let upper = max(durationLower, min(durationUpper, maxValueForFit))
+                span = Double.random(in: durationLower...upper, using: &generator)
             } else {
-                span = min(durationLower, maxSpan)
+                span = durationLower
             }
 
-            guard span >= minimumDuration else { break }
             ranges.append(ClipRange(startSeconds: start, endSeconds: min(start + span, totalDuration), cutMode: .fixed))
 
             guard clipsLeftAfterThis > 0 else { continue }
-            let minStepForThisClip = max(span, intervalLower)
-            let maxStepForFit = totalDuration - start - Double(clipsLeftAfterThis - 1) * minimumStep - minimumDuration
-            guard maxStepForFit >= minStepForThisClip else { break }
 
-            let step: Double
+            let spacing: Double
             if randomizeInterval {
-                let upper = max(minStepForThisClip, min(max(intervalUpper, span), maxStepForFit))
-                step = Double.random(in: minStepForThisClip...upper, using: &generator)
+                let upper = max(intervalLower, min(intervalUpper, maxValueForFit))
+                spacing = Double.random(in: intervalLower...upper, using: &generator)
             } else {
-                step = min(max(anchorInterval, span), maxStepForFit)
+                spacing = intervalLower
             }
-            start += max(step, minStepForThisClip)
+            start += max(span, spacing)
         }
         return ranges
     }

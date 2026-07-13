@@ -320,6 +320,17 @@ struct MediaProject: Identifiable, Codable, Equatable {
         return scenes.first
     }
 
+    /// Friendly source label for library and export UI. The sandbox filename
+    /// is intentionally never shown directly because it carries timestamps
+    /// and UUIDs that have no meaning to the editor.
+    var footageDisplayName: String {
+        FootageTitleFormatter.displayName(
+            from: activeScene?.sourceOriginalFilename
+                ?? activeScene?.sourceFileName
+                ?? sourceFileName
+        )
+    }
+
     init(
         id: UUID,
         title: String,

@@ -4,42 +4,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct HomeView: View {
-    private enum ImportPreparationStage: Int {
-        case loadingFromPhotos
-        case copyingToWorkspace
-        case checkingVideo
-        case ready
-
-        var title: String {
-            switch self {
-            case .loadingFromPhotos:
-                return "Loading from Photos"
-            case .copyingToWorkspace:
-                return "Copying into ReelClips"
-            case .checkingVideo:
-                return "Checking video"
-            case .ready:
-                return "Ready to trim"
-            }
-        }
-
-        var detail: String {
-            switch self {
-            case .loadingFromPhotos:
-                return "Downloading the selected video to this device."
-            case .copyingToWorkspace:
-                return "Saving a private working copy. Your original stays unchanged."
-            case .checkingVideo:
-                return "Reading the clip duration and preparing playback."
-            case .ready:
-                return "Opening the trim controls."
-            }
-        }
-    }
-
     @EnvironmentObject private var viewModel: VideoSplitterViewModel
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
     @Binding var selectedTab: RootView.AppTab
+    @Binding var shouldPresentSourceChooser: Bool
     @State private var isFileImporterPresented = false
     @State private var isReelClipImporterPresented = false
     @State private var isReelClipExporterPresented = false
@@ -60,9 +28,7 @@ struct HomeView: View {
     @State private var projectRenameDraft: String = ""
     @State private var homePickerItem: PhotosPickerItem? = nil
     @State private var pendingImport: ImportTrimRequest?
-    @State private var isPreparingImport = false
-    @State private var importPreparationProgress = 0.0
-    @State private var importPreparationStage: ImportPreparationStage = .loadingFromPhotos
+    @StateObject private var importPreparation = SourceImportPreparation()
 
     var body: some View {
         NavigationStack {
@@ -70,8 +36,11 @@ struct HomeView: View {
                 AppPalette.background.ignoresSafeArea()
                 homeScroll
 
-                if isPreparingImport {
-                    importPreparationOverlay
+                if importPreparation.isPreparing {
+                    ImportPreparationOverlay(
+                        progress: importPreparation.progress,
+                        stage: importPreparation.stage
+                    )
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
@@ -163,32 +132,38 @@ struct HomeView: View {
             matching: .videos,
             photoLibrary: .shared()
         )
+        .onChange(of: shouldPresentSourceChooser) { _, shouldPresent in
+            guard shouldPresent else { return }
+            shouldPresentSourceChooser = false
+            guard !viewModel.isImportingMedia, !importPreparation.isPreparing else { return }
+            isSourceChooserPresented = true
+        }
     }
 
     /// Dismiss the app-owned chooser before presenting another system picker.
     /// Presenting the picker in the same transaction makes iOS drop one of the
     /// two presentations, especially on a tab-root view.
     private func presentPhotosSourcePicker() {
-        guard !viewModel.isImportingMedia, !isPreparingImport else { return }
+        guard !viewModel.isImportingMedia, !importPreparation.isPreparing else { return }
         isSourceChooserPresented = false
         homePickerItem = nil
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 280_000_000)
             guard !isSourceChooserPresented,
                   !viewModel.isImportingMedia,
-                  !isPreparingImport else { return }
+                  !importPreparation.isPreparing else { return }
             isHomePhotosPickerPresented = true
         }
     }
 
     private func presentFilesSourcePicker() {
-        guard !viewModel.isImportingMedia, !isPreparingImport else { return }
+        guard !viewModel.isImportingMedia, !importPreparation.isPreparing else { return }
         isSourceChooserPresented = false
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 280_000_000)
             guard !isSourceChooserPresented,
                   !viewModel.isImportingMedia,
-                  !isPreparingImport else { return }
+                  !importPreparation.isPreparing else { return }
             isFileImporterPresented = true
         }
     }
@@ -213,54 +188,6 @@ struct HomeView: View {
                 StickyBrandHeader()
             }
         )
-    }
-
-    private var importPreparationOverlay: some View {
-        let percentage = Int((min(max(importPreparationProgress, 0), 1) * 100).rounded(.down))
-
-        return ZStack {
-            AppPalette.background.opacity(0.98)
-                .ignoresSafeArea()
-
-            VStack(spacing: 22) {
-                Image(systemName: importPreparationStage == .ready ? "checkmark" : "film.stack")
-                    .font(.system(size: 30, weight: .black))
-                    .foregroundStyle(AppPalette.background)
-                    .frame(width: 64, height: 64)
-                    .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                Text("Preparing clip")
-                    .font(.title2.weight(.black))
-                    .foregroundStyle(AppPalette.primaryText)
-
-                VStack(spacing: 8) {
-                    Text("\(percentage)%")
-                        .font(.system(size: 52, weight: .black, design: .rounded).monospacedDigit())
-                        .foregroundStyle(AppPalette.primaryText)
-                        .contentTransition(.numericText(value: Double(percentage)))
-
-                    Text(importPreparationStage.title)
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(AppPalette.accent)
-                }
-
-                ProgressView(value: importPreparationProgress, total: 1)
-                    .tint(AppPalette.accent)
-                    .frame(maxWidth: 360)
-                    .scaleEffect(x: 1, y: 2, anchor: .center)
-                    .animation(.easeOut(duration: 0.16), value: importPreparationProgress)
-
-                Text(importPreparationStage.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(AppPalette.secondaryText)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 340)
-            }
-            .padding(.horizontal, 28)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Preparing clip. \(percentage) percent. \(importPreparationStage.title)")
-        .transition(.opacity)
     }
 
     private var upgradeFooter: some View {
@@ -323,7 +250,7 @@ struct HomeView: View {
 
             HStack(spacing: 10) {
                 Button {
-                    guard !viewModel.isImportingMedia, !isPreparingImport else { return }
+                    guard !viewModel.isImportingMedia, !importPreparation.isPreparing else { return }
                     isFileImporterPresented = true
                 } label: {
                     Label("Files", systemImage: "externaldrive")
@@ -332,7 +259,7 @@ struct HomeView: View {
                         .frame(height: 52)
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.isImportingMedia || isPreparingImport)
+                .disabled(viewModel.isImportingMedia || importPreparation.isPreparing)
                 .foregroundStyle(AppPalette.primaryText)
                 .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay {
@@ -355,10 +282,10 @@ struct HomeView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(AppPalette.background)
                 .background(AppPalette.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .disabled(viewModel.isImportingMedia || isPreparingImport)
+                .disabled(viewModel.isImportingMedia || importPreparation.isPreparing)
                 .onChange(of: homePickerItem) { _, newItem in
                     guard newItem != nil else { return }
-                    guard !viewModel.isImportingMedia, !isPreparingImport else {
+                    guard !viewModel.isImportingMedia, !importPreparation.isPreparing else {
                         homePickerItem = nil
                         return
                     }
@@ -408,45 +335,19 @@ struct HomeView: View {
     }
 
     private func preparePhotoForNewProject(from item: PhotosPickerItem) {
-        guard !isPreparingImport else { return }
-        beginImportPreparation(stage: .loadingFromPhotos)
+        guard !importPreparation.isPreparing else { return }
         viewModel.statusMessage = "Preparing clip..."
-        let photoLibraryIdentifier = item.photoLibraryLocalIdentifier
         let workspaceRoot = viewModel.importWorkspaceRoot
 
         Task { @MainActor in
-            var preparedCopy: ImportedSourceCopy?
             do {
-                let prepared = try await preparePhotoCopy(
+                pendingImport = try await importPreparation.preparePhoto(
                     from: item,
                     workspaceRoot: workspaceRoot
                 )
-                preparedCopy = prepared.copy
-                updateImportPreparationProgress(0.96, stage: .checkingVideo)
-                let duration = try await preparedVideoDuration(for: prepared.copy.url)
-
-                let request = ImportTrimRequest(
-                    url: prepared.copy.url,
-                    photoLibraryIdentifier: photoLibraryIdentifier,
-                    sourceName: prepared.sourceName,
-                    canDiscardSourceOnCancel: prepared.copy.wasCreated,
-                    durationSeconds: duration
-                )
-                updateImportPreparationProgress(1, stage: .ready)
-                try? await Task.sleep(nanoseconds: 180_000_000)
-                pendingImport = request
-                isPreparingImport = false
             } catch is CancellationError {
-                if let preparedCopy, preparedCopy.wasCreated {
-                    viewModel.discardPreparedImport(at: preparedCopy.url)
-                }
-                isPreparingImport = false
                 viewModel.statusMessage = "Import cancelled."
             } catch {
-                if let preparedCopy, preparedCopy.wasCreated {
-                    viewModel.discardPreparedImport(at: preparedCopy.url)
-                }
-                isPreparingImport = false
                 viewModel.errorMessage = error.localizedDescription
                 viewModel.statusMessage = "Could not prepare video."
             }
@@ -454,177 +355,26 @@ struct HomeView: View {
     }
 
     private func prepareFileForNewProject(from url: URL) {
-        guard !isPreparingImport else { return }
-        beginImportPreparation(stage: .copyingToWorkspace)
+        guard !importPreparation.isPreparing else { return }
         viewModel.statusMessage = "Preparing clip..."
-        let didAccess = url.startAccessingSecurityScopedResource()
+        let workspaceRoot = viewModel.importWorkspaceRoot
 
         Task { @MainActor in
-            var preparedCopy: ImportedSourceCopy?
-            defer {
-                if didAccess {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-
             do {
-                // iCloud Drive and other cloud-backed files arrive as
-                // placeholders. Force the download to the local cache
-                // BEFORE the workspace copy step tries to read bytes,
-                // otherwise the import fails with "file doesn't exist"
-                // even though the file is present in the cloud.
-                try await MediaImportPreparation.ensureFileIsLocal(url) { fraction in
-                    Task { @MainActor in
-                        updateImportPreparationProgress(
-                            fraction * 0.5,
-                            stage: .copyingToWorkspace
-                        )
+                pendingImport = try await importPreparation.prepareFile(
+                    from: url,
+                    workspaceRoot: workspaceRoot,
+                    copyToWorkspace: { url, progress in
+                        try await viewModel.prepareImportCopy(from: url, progress: progress)
                     }
-                }
-
-                let copied = try await viewModel.prepareImportCopy(from: url) { fraction in
-                    Task { @MainActor in
-                        updateImportPreparationProgress(
-                            0.5 + fraction * 0.45,
-                            stage: .copyingToWorkspace
-                        )
-                    }
-                }
-                preparedCopy = copied
-                updateImportPreparationProgress(0.96, stage: .checkingVideo)
-                let duration = try await preparedVideoDuration(for: copied.url)
-
-                let request = ImportTrimRequest(
-                    url: copied.url,
-                    photoLibraryIdentifier: nil,
-                    sourceName: url.lastPathComponent,
-                    canDiscardSourceOnCancel: copied.wasCreated,
-                    durationSeconds: duration
                 )
-                updateImportPreparationProgress(1, stage: .ready)
-                try? await Task.sleep(nanoseconds: 180_000_000)
-                pendingImport = request
-                isPreparingImport = false
             } catch is CancellationError {
-                if let preparedCopy, preparedCopy.wasCreated {
-                    viewModel.discardPreparedImport(at: preparedCopy.url)
-                }
-                isPreparingImport = false
                 viewModel.statusMessage = "Import cancelled."
             } catch {
-                if let preparedCopy, preparedCopy.wasCreated {
-                    viewModel.discardPreparedImport(at: preparedCopy.url)
-                }
-                isPreparingImport = false
                 viewModel.errorMessage = error.localizedDescription
                 viewModel.statusMessage = "Could not prepare file."
             }
         }
-    }
-
-    @MainActor
-    private func preparePhotoCopy(
-        from item: PhotosPickerItem,
-        workspaceRoot: URL
-    ) async throws -> (copy: ImportedSourceCopy, sourceName: String) {
-        try await withCheckedThrowingContinuation { continuation in
-            let transferProgress = item.loadTransferable(type: PickedVideo.self) { result in
-                switch result {
-                case .success(.some(let video)):
-                    do {
-                        Task { @MainActor in
-                            updateImportPreparationProgress(0.92, stage: .copyingToWorkspace)
-                        }
-
-                        let workspace = MediaWorkspace(rootDirectory: workspaceRoot)
-                        let copy: ImportedSourceCopy
-                        if video.url.deletingLastPathComponent().standardizedFileURL
-                            == workspace.importsDirectory.standardizedFileURL {
-                            copy = ImportedSourceCopy(
-                                url: video.url,
-                                wasCreated: video.isWorkspaceCopyNew
-                            )
-                        } else {
-                            // Tests and app extensions may use a custom root.
-                            // The first URL is already stable, so relocating it
-                            // here is safe even after PhotosUI releases its file.
-                            copy = try workspace.importSourceCopyResult(from: video.url)
-                        }
-                        continuation.resume(returning: (copy, video.sourceName))
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                case .success(.none):
-                    continuation.resume(throwing: NSError(
-                        domain: "HomeViewImport",
-                        code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: "Choose a valid video file."]
-                    ))
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
-            }
-
-            Task { @MainActor in
-                await observePhotoTransferProgress(transferProgress)
-            }
-        }
-    }
-
-    @MainActor
-    private func observePhotoTransferProgress(_ transferProgress: Progress) async {
-        while isPreparingImport, importPreparationStage == .loadingFromPhotos {
-            let fraction = transferProgress.fractionCompleted
-            if fraction.isFinite {
-                updateImportPreparationProgress(
-                    min(max(fraction, 0), 1) * 0.90,
-                    stage: .loadingFromPhotos
-                )
-            }
-            if transferProgress.isFinished || transferProgress.isCancelled {
-                break
-            }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-    }
-
-    @MainActor
-    private func preparedVideoDuration(for url: URL) async throws -> Double {
-        let asset = AVURLAsset(url: url)
-        async let loadedDuration = asset.load(.duration)
-        async let videoTracks = asset.loadTracks(withMediaType: .video)
-        let (duration, tracks) = try await (loadedDuration, videoTracks)
-        let seconds = CMTimeGetSeconds(duration)
-        guard seconds.isFinite, seconds > 0, !tracks.isEmpty else {
-            throw NSError(
-                domain: "HomeViewImport",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "The selected video could not be read."]
-            )
-        }
-        return seconds
-    }
-
-    @MainActor
-    private func beginImportPreparation(stage: ImportPreparationStage) {
-        importPreparationProgress = 0
-        importPreparationStage = stage
-        withAnimation(.easeOut(duration: 0.18)) {
-            isPreparingImport = true
-        }
-    }
-
-    @MainActor
-    private func updateImportPreparationProgress(
-        _ value: Double,
-        stage: ImportPreparationStage
-    ) {
-        guard stage.rawValue >= importPreparationStage.rawValue else { return }
-        importPreparationStage = stage
-        importPreparationProgress = max(
-            importPreparationProgress,
-            min(max(value, 0), 1)
-        )
     }
 
     private func commitNewProjectImport(_ request: ImportTrimRequest, trimRange: ClipRange?) {
@@ -692,7 +442,7 @@ struct HomeView: View {
                                 .font(.headline.weight(.bold))
                                 .foregroundStyle(AppPalette.primaryText)
                                 .lineLimit(1)
-                            Text(latest.sourceFileName)
+                            Text(latest.footageDisplayName)
                                 .font(.caption)
                                 .foregroundStyle(AppPalette.secondaryText)
                                 .lineLimit(1)
@@ -856,7 +606,7 @@ struct HomeView: View {
                             .foregroundStyle(AppPalette.primaryText)
                             .lineLimit(1)
 
-                        Text(project.sourceFileName)
+                        Text(project.footageDisplayName)
                             .font(.caption)
                             .foregroundStyle(AppPalette.secondaryText)
                             .lineLimit(1)
@@ -940,7 +690,12 @@ struct HomeView: View {
 /// Source selection belongs above the app's tab bar. Keeping it in a small
 /// sheet gives both actions their own reliable touch target and avoids the
 /// system confirmation-dialog placement underneath the persistent navigation.
-private struct SourceChooserSheet: View {
+/// Shared compact source chooser used when creating a project and when adding
+/// or replacing the video for an existing scene. Keeping one presentation
+/// prevents the two entry points from drifting apart visually or behaviorally.
+struct SourceChooserSheet: View {
+    var title = "Pick a source"
+    var subtitle = "Start a new ReelClip project"
     let onPhotos: () -> Void
     let onFiles: () -> Void
 
@@ -950,10 +705,10 @@ private struct SourceChooserSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Pick a source")
+                    Text(title)
                         .font(.title3.weight(.black))
                         .foregroundStyle(AppPalette.primaryText)
-                    Text("Start a new ReelClip project")
+                    Text(subtitle)
                         .font(.subheadline)
                         .foregroundStyle(AppPalette.secondaryText)
                 }

@@ -10,6 +10,16 @@ enum CollapsibleSection: Hashable {
     case transcript
 }
 
+/// A materialized source waiting at the shared trim step. The initiating scene
+/// ID travels with it so a scene switch while a large video is downloading can
+/// never install the result into whichever scene happens to be active later.
+private struct PendingSceneSourceImport: Identifiable {
+    var id: UUID { request.id }
+    let request: ImportTrimRequest
+    let planAction: SceneSourceReplacementPlanAction
+    let sceneID: UUID
+}
+
 struct ClipView: View {
     @EnvironmentObject private var viewModel: VideoSplitterViewModel
     @EnvironmentObject private var subscriptionStore: SubscriptionStore
@@ -17,13 +27,16 @@ struct ClipView: View {
 
     @State private var previewPlayer = AVPlayer()
     @State private var isPreviewPlaying = false
-    @State private var isScrubbing = false
     @State private var isSceneSourceFileImporterPresented = false
+    @State private var isSceneSourcePhotosPickerPresented = false
     @State private var isSceneSourceSheetPresented = false
     @State private var sceneSourcePickerItem: PhotosPickerItem? = nil
     @State private var pendingSceneSourceFileURL: URL? = nil
     @State private var pendingSceneSourcePhotoItem: PhotosPickerItem? = nil
     @State private var isSceneSourcePlanDialogPresented = false
+    @State private var isSceneSourceTrimPlanDialogPresented = false
+    @StateObject private var sceneImportPreparation = SourceImportPreparation()
+    @State private var pendingSceneImport: PendingSceneSourceImport? = nil
     @State private var isSceneResetConfirmationPresented = false
     @State private var isExportTargetChooserPresented = false
     @State private var isExportScenePickerPresented = false
@@ -92,6 +105,14 @@ struct ClipView: View {
             ZStack {
                 AppPalette.background.ignoresSafeArea()
                 editorWorkspace
+
+                if sceneImportPreparation.isPreparing {
+                    ImportPreparationOverlay(
+                        progress: sceneImportPreparation.progress,
+                        stage: sceneImportPreparation.stage
+                    )
+                    .zIndex(2)
+                }
             }
             .navigationBarTitleDisplayMode(.inline)
             // Keyboard accessory: only show a Done button when a
@@ -395,7 +416,7 @@ struct ClipView: View {
         photoItem: PhotosPickerItem? = nil
     ) {
         guard fileURL != nil || photoItem != nil else { return }
-        guard !viewModel.isImportingMedia else {
+        guard !viewModel.isImportingMedia, !sceneImportPreparation.isPreparing else {
             clearPendingSceneSourceReplacement()
             return
         }
@@ -411,14 +432,179 @@ struct ClipView: View {
         isSceneSourcePlanDialogPresented = true
     }
 
-    private func performPendingSceneSourceReplacement(planAction: SceneSourceReplacementPlanAction) {
-        if let fileURL = pendingSceneSourceFileURL {
-            viewModel.replaceActiveSceneSource(from: fileURL, planAction: planAction)
-        } else if let photoItem = pendingSceneSourcePhotoItem {
-            viewModel.replaceActiveSceneSource(from: photoItem, planAction: planAction)
+    /// Reopens the same in/out trim sheet used during import for the source
+    /// already attached to this scene. The original sandbox copy remains
+    /// untouched until the selected section has rendered and installed.
+    private func requestActiveSceneSourceTrim() {
+        guard !viewModel.isImportingMedia,
+              !sceneImportPreparation.isPreparing,
+              let sourceURL = viewModel.sourceURL,
+              let duration = viewModel.durationSeconds,
+              duration.isFinite,
+              duration > 0,
+              let sceneID = viewModel.activeSceneId
+        else {
+            return
         }
 
-        clearPendingSceneSourceReplacement()
+        guard !viewModel.plannedRanges.isEmpty else {
+            presentActiveSceneTrim(
+                sourceURL: sourceURL,
+                duration: duration,
+                sceneID: sceneID,
+                planAction: .keep
+            )
+            return
+        }
+
+        isSceneSourceTrimPlanDialogPresented = true
+    }
+
+    private func presentActiveSceneTrim(planAction: SceneSourceReplacementPlanAction) {
+        guard let sourceURL = viewModel.sourceURL,
+              let duration = viewModel.durationSeconds,
+              duration.isFinite,
+              duration > 0,
+              let sceneID = viewModel.activeSceneId
+        else {
+            return
+        }
+
+        presentActiveSceneTrim(
+            sourceURL: sourceURL,
+            duration: duration,
+            sceneID: sceneID,
+            planAction: planAction
+        )
+    }
+
+    private func presentActiveSceneTrim(
+        sourceURL: URL,
+        duration: Double,
+        sceneID: UUID,
+        planAction: SceneSourceReplacementPlanAction
+    ) {
+        isSceneSourceTrimPlanDialogPresented = false
+        pendingSceneImport = PendingSceneSourceImport(
+            request: ImportTrimRequest(
+                url: sourceURL,
+                photoLibraryIdentifier: viewModel.sourcePhotoLibraryIdentifier,
+                sourceName: sourceURL.lastPathComponent,
+                canDiscardSourceOnCancel: false,
+                durationSeconds: duration
+            ),
+            planAction: planAction,
+            sceneID: sceneID
+        )
+        PolishKit.Haptics.selection.play()
+    }
+
+    private func performPendingSceneSourceReplacement(planAction: SceneSourceReplacementPlanAction) {
+        guard let sceneID = viewModel.activeSceneId else {
+            clearPendingSceneSourceReplacement()
+            return
+        }
+
+        if let fileURL = pendingSceneSourceFileURL {
+            clearPendingSceneSourceReplacement()
+            prepareFileForActiveScene(from: fileURL, planAction: planAction, sceneID: sceneID)
+        } else if let photoItem = pendingSceneSourcePhotoItem {
+            clearPendingSceneSourceReplacement()
+            preparePhotoForActiveScene(from: photoItem, planAction: planAction, sceneID: sceneID)
+        } else {
+            clearPendingSceneSourceReplacement()
+        }
+    }
+
+    private func preparePhotoForActiveScene(
+        from item: PhotosPickerItem,
+        planAction: SceneSourceReplacementPlanAction,
+        sceneID: UUID
+    ) {
+        guard !sceneImportPreparation.isPreparing else { return }
+        viewModel.statusMessage = "Preparing scene source..."
+        let workspaceRoot = viewModel.importWorkspaceRoot
+
+        Task { @MainActor in
+            do {
+                let request = try await sceneImportPreparation.preparePhoto(
+                    from: item,
+                    workspaceRoot: workspaceRoot
+                )
+                pendingSceneImport = PendingSceneSourceImport(
+                    request: request,
+                    planAction: planAction,
+                    sceneID: sceneID
+                )
+            } catch is CancellationError {
+                viewModel.statusMessage = "Scene source import cancelled."
+            } catch {
+                viewModel.errorMessage = error.localizedDescription
+                viewModel.statusMessage = "Could not prepare scene source."
+            }
+        }
+    }
+
+    private func prepareFileForActiveScene(
+        from url: URL,
+        planAction: SceneSourceReplacementPlanAction,
+        sceneID: UUID
+    ) {
+        guard !sceneImportPreparation.isPreparing else { return }
+        viewModel.statusMessage = "Preparing scene source..."
+        let workspaceRoot = viewModel.importWorkspaceRoot
+
+        Task { @MainActor in
+            do {
+                let request = try await sceneImportPreparation.prepareFile(
+                    from: url,
+                    workspaceRoot: workspaceRoot,
+                    copyToWorkspace: { url, progress in
+                        try await viewModel.prepareImportCopy(from: url, progress: progress)
+                    }
+                )
+                pendingSceneImport = PendingSceneSourceImport(
+                    request: request,
+                    planAction: planAction,
+                    sceneID: sceneID
+                )
+            } catch is CancellationError {
+                viewModel.statusMessage = "Scene source import cancelled."
+            } catch {
+                viewModel.errorMessage = error.localizedDescription
+                viewModel.statusMessage = "Could not prepare scene source."
+            }
+        }
+    }
+
+    private func commitPreparedSceneImport(
+        _ pending: PendingSceneSourceImport,
+        trimRange: ClipRange?
+    ) {
+        pendingSceneImport = nil
+        guard viewModel.activeSceneId == pending.sceneID else {
+            discardPreparedSceneImport(pending)
+            viewModel.errorMessage = "The active scene changed before this video could be imported."
+            return
+        }
+
+        viewModel.importPreparedSceneSource(
+            from: pending.request.url,
+            photoLibraryIdentifier: pending.request.photoLibraryIdentifier,
+            sourceName: pending.request.sourceName,
+            canDiscardPreparedSource: pending.request.canDiscardSourceOnCancel,
+            trimRange: trimRange,
+            planAction: pending.planAction,
+            expectedSceneID: pending.sceneID
+        )
+    }
+
+    private func discardPreparedSceneImport(_ pending: PendingSceneSourceImport) {
+        if pending.request.canDiscardSourceOnCancel {
+            viewModel.discardPreparedImport(at: pending.request.url)
+        }
+        pendingSceneImport = nil
+        viewModel.statusMessage = "Scene source import cancelled."
     }
 
     private func clearPendingSceneSourceReplacement() {
@@ -428,6 +614,34 @@ struct ClipView: View {
         sceneSourcePickerItem = nil
         if viewModel.hasOpenProjectContext {
             viewModel.selectedItem = nil
+        }
+    }
+
+    /// Dismiss the shared app-owned chooser before presenting either system
+    /// picker. Presenting both in the same transaction can leave the picker
+    /// behind the tab bar or silently drop the selection on iOS.
+    private func presentScenePhotosSourcePicker() {
+        guard !viewModel.isImportingMedia, !sceneImportPreparation.isPreparing else { return }
+        isSceneSourceSheetPresented = false
+        sceneSourcePickerItem = nil
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard !isSceneSourceSheetPresented,
+                  !viewModel.isImportingMedia,
+                  !sceneImportPreparation.isPreparing else { return }
+            isSceneSourcePhotosPickerPresented = true
+        }
+    }
+
+    private func presentSceneFilesSourcePicker() {
+        guard !viewModel.isImportingMedia, !sceneImportPreparation.isPreparing else { return }
+        isSceneSourceSheetPresented = false
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 280_000_000)
+            guard !isSceneSourceSheetPresented,
+                  !viewModel.isImportingMedia,
+                  !sceneImportPreparation.isPreparing else { return }
+            isSceneSourceFileImporterPresented = true
         }
     }
 
@@ -582,7 +796,9 @@ struct ClipView: View {
     private var headerSection: AnyView {
         AnyView(
             VStack(alignment: .leading, spacing: 14) {
-                // Top row: project title (left) + Export button (right).
+                // Top row: explicit project-name editor (left) + project
+                // export (right). This is intentionally separate from the
+                // Scene menu below, which only renames the active scene.
                 // The brand wordmark lives in StickyBrandHeader at the
                 // scroll level; the page-level header keeps the
                 // project-scoped controls only.
@@ -676,17 +892,32 @@ struct ClipView: View {
 
     private var projectTitleField: AnyView {
         AnyView(
-            TextField(
-                "Untitled project",
-                text: $viewModel.projectTitleDraft
-            )
-            .font(.system(.title2, design: .rounded).weight(.black))
-            .foregroundStyle(AppPalette.primaryText)
-            .lineLimit(1)
-            .minimumScaleFactor(0.78)
-            .focused($isProjectTitleFocused)
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.words)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 5) {
+                    Image(systemName: "folder")
+                        .font(.caption2.weight(.bold))
+                    Text("Project name")
+                        .font(.caption2.weight(.bold))
+                        .textCase(.uppercase)
+                        .tracking(0.7)
+                    Spacer(minLength: 4)
+                    Image(systemName: "pencil")
+                        .font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(AppPalette.secondaryText)
+
+                TextField(
+                    "Untitled project",
+                    text: $viewModel.projectTitleDraft
+                )
+                .font(.system(.title3, design: .rounded).weight(.black))
+                .foregroundStyle(AppPalette.primaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+                .focused($isProjectTitleFocused)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.words)
+            }
             // `.toolbar(placement: .keyboard)` adds a Done
             // button to the keyboard's accessory bar that's
             // wired to release focus. SwiftUI's `.onSubmit`
@@ -805,15 +1036,37 @@ struct ClipView: View {
 
                 Spacer()
 
-                // Reset is deliberately the only inline action here. Source
-                // replacement remains available from the scene menu, while
-                // this control always means "start this scene over".
-                // When the scene has no content (just-reset or a fresh
-                // empty scene), the same slot flips to an Add media CTA
-                // that opens the dedicated Files / Photos chooser.
                 let sceneIsEmpty = !viewModel.hasActiveSceneContent
+
+                // An existing source can be trimmed again without creating a
+                // new project or scene. It uses the same import trim surface
+                // and preserves the old sandbox copy until the replacement is
+                // rendered successfully.
+                if viewModel.sourceURL != nil {
+                    Button {
+                        requestActiveSceneSourceTrim()
+                    } label: {
+                        Image(systemName: "scissors")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AppPalette.primaryText)
+                            .frame(width: 44, height: 44)
+                            .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(AppPalette.hairline, lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(viewModel.isImportingMedia || sceneImportPreparation.isPreparing)
+                    .accessibilityLabel("Trim source")
+                    .accessibilityHint("Choose an in and out range for this scene's video.")
+                    .help("Trim source")
+                }
+
+                // Reset clears only the current scene. When the scene has no
+                // content, the same slot becomes the shared media chooser.
                 Button {
-                    guard !viewModel.isImportingMedia else { return }
+                    guard !viewModel.isImportingMedia, !sceneImportPreparation.isPreparing else { return }
                     if sceneIsEmpty {
                         isSceneSourceSheetPresented = true
                     } else {
@@ -835,7 +1088,7 @@ struct ClipView: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .disabled(viewModel.isImportingMedia)
+                .disabled(viewModel.isImportingMedia || sceneImportPreparation.isPreparing)
                 .accessibilityLabel(sceneIsEmpty ? "Add video media to this scene" : "Reset active scene")
                 .accessibilityHint(
                     sceneIsEmpty
@@ -1047,27 +1300,38 @@ struct ClipView: View {
     }
 
     private var emptyVideoState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "film.stack")
-                .font(.system(size: 42, weight: .semibold))
-                .foregroundStyle(AppPalette.accent)
+        Button {
+            guard !viewModel.isImportingMedia, !sceneImportPreparation.isPreparing else { return }
+            isSceneSourceSheetPresented = true
+            PolishKit.Haptics.tap(.medium).play()
+        } label: {
+            VStack(spacing: 14) {
+                Image(systemName: "film.stack")
+                    .font(.system(size: 42, weight: .semibold))
+                    .foregroundStyle(AppPalette.accent)
 
-            Text("No source video")
-                .font(.headline.weight(.bold))
-                .foregroundStyle(AppPalette.primaryText)
+                Text("No source video")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(AppPalette.primaryText)
 
-            Text("Import a clip from Files or Photos to start planning your cut.")
-                .font(.subheadline)
-                .foregroundStyle(AppPalette.secondaryText)
-                .multilineTextAlignment(.center)
+                Text("Import a clip from Files or Photos to start planning your cut.")
+                    .font(.subheadline)
+                    .foregroundStyle(AppPalette.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 36)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 36)
+        .buttonStyle(.plain)
+        .disabled(viewModel.isImportingMedia || sceneImportPreparation.isPreparing)
         .background(AppPalette.mediaWell, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(AppPalette.hairline, lineWidth: 1)
         }
+        .accessibilityLabel("Import video into \(viewModel.activeSceneName)")
+        .accessibilityHint("Choose a video from Photos or Files.")
     }
 
     private var sourceTimelineScrubber: some View {
@@ -1234,7 +1498,9 @@ struct ClipView: View {
     /// scrubber that lived on the waveform (which was removed to avoid
     /// two surfaces fighting for the same playhead value).
     private var playbackScrubber: some View {
-        HStack(spacing: 10) {
+        let sourceDuration = max(viewModel.durationSeconds ?? 0, 0)
+
+        return HStack(spacing: 10) {
             Slider(
                 value: Binding(
                     get: { viewModel.scrubPositionSeconds },
@@ -1243,15 +1509,19 @@ struct ClipView: View {
                         seekPreview(to: newValue, pause: true)
                     }
                 ),
-                in: 0...max(1, viewModel.durationSeconds ?? 1)
+                in: 0...max(sourceDuration, 1)
             )
             .tint(AppPalette.accent)
             .controlSize(.regular)
+            .disabled(sourceDuration <= 0)
+            .accessibilityLabel("Source timeline position")
 
-            Text("\(viewModel.scrubPositionLabel) / \(viewModel.durationLabel)")
+            Text("\(viewModel.scrubPositionLabel) / \(viewModel.sourceDurationLabel)")
                 .font(.caption.monospacedDigit().weight(.bold))
                 .foregroundStyle(AppPalette.secondaryText)
-                .frame(width: 90, alignment: .trailing)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: 104, alignment: .trailing)
         }
     }
 
@@ -1681,15 +1951,49 @@ struct ClipView: View {
                 Text("This deletes \(scene.name) and any planned clips in it. Exported clips stay.")
             }
         }
-        // "Change source for this scene" sheet — gives the user a
-        // focused UI to pick a new source for the active scene only.
-        // The two pickers (Files / Photos) live inside the sheet so
-        // they don't conflict with the main source stage's pickers,
-        // which are wired to the "new project" flow.
+        // The scene source chooser is the same compact component used on
+        // Home. Only the destination differs: this flow installs media into
+        // the active scene instead of creating a new project.
         .sheet(isPresented: $isSceneSourceSheetPresented) {
-            sceneSourcePickerSheet
-                .presentationDetents([.medium])
+            SourceChooserSheet(
+                title: "Pick a source",
+                subtitle: viewModel.sourceURL == nil
+                    ? "Add media to \(viewModel.activeSceneName)"
+                    : "Replace media in \(viewModel.activeSceneName)",
+                onPhotos: presentScenePhotosSourcePicker,
+                onFiles: presentSceneFilesSourcePicker
+            )
+                .presentationDetents([.height(252)])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(AppPalette.background)
+        }
+        .photosPicker(
+            isPresented: $isSceneSourcePhotosPickerPresented,
+            selection: $sceneSourcePickerItem,
+            matching: .videos,
+            photoLibrary: .shared()
+        )
+        .onChange(of: sceneSourcePickerItem) { _, newItem in
+            guard let newItem else { return }
+            guard !viewModel.isImportingMedia, !sceneImportPreparation.isPreparing else {
+                sceneSourcePickerItem = nil
+                return
+            }
+            requestSceneSourceReplacement(photoItem: newItem)
+            sceneSourcePickerItem = nil
+        }
+        .sheet(item: $pendingSceneImport) { pending in
+            ImportTrimSheet(
+                request: pending.request,
+                onImport: { range in
+                    commitPreparedSceneImport(pending, trimRange: range)
+                },
+                onCancel: {
+                    discardPreparedSceneImport(pending)
+                }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
         // Pre-export chooser. Multi-scene options ("Pick a scene…"
         // + "All scenes") are gated to Creator+ — Free users get
@@ -1747,6 +2051,24 @@ struct ClipView: View {
         } message: {
             Text("This scene already has planned clips. Keep them as-is, clamp any out-of-range clips to the new video length, or clear the scene plan.")
         }
+        .confirmationDialog(
+            "Trim source and planned clips?",
+            isPresented: $isSceneSourceTrimPlanDialogPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Keep planned clips") {
+                presentActiveSceneTrim(planAction: .keep)
+            }
+            Button("Clamp clips to trimmed video") {
+                presentActiveSceneTrim(planAction: .clamp)
+            }
+            Button("Clear planned clips", role: .destructive) {
+                presentActiveSceneTrim(planAction: .clear)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Trimming creates a new working source for this scene. Keep the plan as-is, clamp clips to the new duration, or start the scene plan again.")
+        }
         // Scene picker sub-sheet for the "Pick a scene…" branch of
         // the export chooser. Lists all scenes with a planned-clips
         // count; tapping one kicks off the render for that scene.
@@ -1755,8 +2077,8 @@ struct ClipView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        // File importer for the scene-source flow. Triggered by the
-        // "Pick from Files" button in the sheet above.
+        // File importer for the scene-source flow. Triggered by the shared
+        // source chooser after its dismissal animation completes.
         .fileImporter(
             isPresented: $isSceneSourceFileImporterPresented,
             allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie],
@@ -1771,93 +2093,6 @@ struct ClipView: View {
                 viewModel.errorMessage = error.localizedDescription
             }
         }
-    }
-
-    /// Sheet that lets the user pick a new source for the active
-    /// scene. Two large buttons: one for the file importer (Files)
-    /// and one for the system Photos library. The PhotosPicker is
-    /// embedded directly so the user can tap once to open the
-    /// library; on selection, `onChange` routes through
-    /// `replaceActiveSceneSource(from:)`.
-    private var sceneSourcePickerSheet: some View {
-        let hasSource = viewModel.sourceURL != nil
-        return VStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(hasSource ? "Replace source for this scene" : "Add media to this scene")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(AppPalette.primaryText)
-                Text(
-                    hasSource
-                        ? "Other scenes keep their source. If this scene already has planned clips, choose whether to keep, clamp, or clear them after picking the new video."
-                        : "Choose a video from Files or Photos. Project files are imported separately from the Home tab."
-                )
-                    .font(.subheadline)
-                    .foregroundStyle(AppPalette.secondaryText)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button {
-                guard !viewModel.isImportingMedia else { return }
-                isSceneSourceSheetPresented = false
-                // Defer the file importer to the next runloop tick
-                // so the sheet has a chance to dismiss first;
-                // presenting both at the same time breaks SwiftUI.
-                DispatchQueue.main.async {
-                    isSceneSourceFileImporterPresented = true
-                }
-            } label: {
-                Label("Pick from Files", systemImage: "externaldrive")
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(AppPalette.hairline, lineWidth: 1)
-                    }
-                    .foregroundStyle(AppPalette.primaryText)
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.isImportingMedia)
-
-            PhotosPicker(
-                selection: $sceneSourcePickerItem,
-                matching: .videos,
-                preferredItemEncoding: .current,
-                photoLibrary: .shared()
-            ) {
-                Label("Pick from Photos", systemImage: "photo.on.rectangle")
-                    .font(.headline.weight(.bold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(AppPalette.controlSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(AppPalette.hairline, lineWidth: 1)
-                    }
-                    .foregroundStyle(AppPalette.primaryText)
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.isImportingMedia)
-            .onChange(of: sceneSourcePickerItem) { _, newItem in
-                guard newItem != nil else { return }
-                guard !viewModel.isImportingMedia else {
-                    sceneSourcePickerItem = nil
-                    return
-                }
-                requestSceneSourceReplacement(photoItem: newItem!)
-                isSceneSourceSheetPresented = false
-                sceneSourcePickerItem = nil
-            }
-
-            Button("Cancel", role: .cancel) {
-                isSceneSourceSheetPresented = false
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(AppPalette.mutedText)
-        }
-        .padding(24)
-        .background(AppPalette.background)
     }
 
     private var resetRecipeButton: some View {
@@ -1877,7 +2112,7 @@ struct ClipView: View {
                 viewModel.resetCurrentRecipeFields()
                 PolishKit.Haptics.selection.play()
             } else {
-                guard !viewModel.isImportingMedia else { return }
+                guard !viewModel.isImportingMedia, !sceneImportPreparation.isPreparing else { return }
                 PolishKit.Haptics.tap(.medium).play()
                 isSceneSourceSheetPresented = true
             }
@@ -2981,7 +3216,7 @@ struct ClipView: View {
                     .background(AppPalette.accent.opacity(0.12), in: Circle())
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Project export preview")
+                    Text("Project export queue")
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(AppPalette.primaryText)
                     Text(projectExportSummaryText(
@@ -2995,6 +3230,10 @@ struct ClipView: View {
                     .foregroundStyle(AppPalette.secondaryText)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+
+                    Text(viewModel.isShuffled ? "Custom render order" : "Scene render order")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(viewModel.isShuffled ? AppPalette.accent : AppPalette.mutedText)
                 }
 
                 Spacer(minLength: 8)
@@ -3047,7 +3286,7 @@ struct ClipView: View {
                     PolishKit.Haptics.tap(.medium).play()
                     viewModel.prepareExport(target: .allScenes)
                 } label: {
-                    Image(systemName: "square.and.arrow.down")
+                    Image(systemName: "film.stack.fill")
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(exportableCount == 0 ? AppPalette.mutedText : AppPalette.background)
                         .frame(width: 42, height: 42)
@@ -3058,7 +3297,31 @@ struct ClipView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(exportableCount == 0 || viewModel.isProcessing)
-                .accessibilityLabel("Export all planned clips in this project")
+                .accessibilityLabel("Render the project queue for review")
+                .accessibilityHint("Long-press for direct Photos save and other export routes.")
+                .contextMenu {
+                    Button {
+                        isSegmentFieldFocused = false
+                        viewModel.prepareExport(target: .allScenes, delivery: .review)
+                    } label: {
+                        Label("Render project for review", systemImage: "film.stack.fill")
+                    }
+
+                    Button {
+                        isSegmentFieldFocused = false
+                        viewModel.prepareExport(target: .allScenes, delivery: .saveToPhotos)
+                    } label: {
+                        Label("Render and save to Photos", systemImage: "photo.badge.arrow.down")
+                    }
+
+                    Divider()
+
+                    Button {
+                        isExportTargetChooserPresented = true
+                    } label: {
+                        Label("Choose another render scope", systemImage: "slider.horizontal.3")
+                    }
+                }
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -3677,10 +3940,10 @@ struct ClipView: View {
         // user's saved-side shuffle in real time.
         VStack(alignment: .leading, spacing: 12) {
             collapsibleSectionTitle(
-                "Saved clips",
+                "Saved plan",
                 detail: viewModel.savedClips.isEmpty
-                    ? "None yet"
-                    : (viewModel.savedClips.count == 1 ? "1 clip" : "\(viewModel.savedClips.count) clips"),
+                    ? "No recipe snapshot"
+                    : (viewModel.savedClips.count == 1 ? "1 planned clip" : "\(viewModel.savedClips.count) planned clips"),
                 section: .savedClips,
                 systemImage: "checkmark.circle",
                 trailing: { savedClipsShuffleButton }
@@ -3747,7 +4010,7 @@ struct ClipView: View {
                     .background(AppPalette.accent.opacity(0.12), in: Circle())
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Committed clips")
+                    Text("Saved recipe snapshot")
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(AppPalette.primaryText)
                     Text(savedClipsSummaryText(

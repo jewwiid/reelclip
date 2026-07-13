@@ -46,7 +46,7 @@ struct ClipExportActionDock: View {
             PolishKit.Haptics.tap(.medium).play()
             viewModel.commitPlannedToSaved()
         } label: {
-            Label(visibleCount == 1 ? "Save clip" : "Save clips", systemImage: "checkmark.circle.fill")
+            Label("Save recipe", systemImage: "bookmark.fill")
                 .font(.headline.weight(.bold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 54)
@@ -59,7 +59,8 @@ struct ClipExportActionDock: View {
         )
         .disabled(!canSave)
         .polishPressFeedback(scale: 0.97, pressedOpacity: 0.85)
-        .accessibilityLabel("Save visible planned clips to project")
+        .accessibilityLabel("Save this recipe's planned clips to the project")
+        .accessibilityHint("Creates a saved plan snapshot. It does not render or save video to Photos.")
     }
 
     private var exportButton: some View {
@@ -75,7 +76,7 @@ struct ClipExportActionDock: View {
                 viewModel.exportPreparedClips()
             }
         } label: {
-            Label(count == 1 ? "Export clip" : "Export clips", systemImage: "square.and.arrow.down")
+            Label(count == 1 ? "Render clip" : "Render clips", systemImage: "film.stack.fill")
                 .font(.headline.weight(.bold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 54)
@@ -88,7 +89,8 @@ struct ClipExportActionDock: View {
         )
         .disabled(!canExport)
         .polishPressFeedback()
-        .accessibilityLabel("Export all planned clips in this project")
+        .accessibilityLabel("Render planned clips for review")
+        .accessibilityHint("Rendered clips are reviewed before they are saved to Photos.")
     }
 
     private var importStatusBar: some View {

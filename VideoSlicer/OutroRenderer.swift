@@ -3,9 +3,9 @@ import Foundation
 import UIKit
 
 /// Composes a 3-second animated outro that is appended to the end of every
-/// exported clip. The outro renders the transparent ReelClip icon mark,
-/// centred on a solid background, with a fade-scale-in entrance and a brief
-/// fade-out exit.
+/// exported clip. The outro renders the transparent ReelClip icon mark with
+/// a short caption on a solid background, with a fade-scale-in entrance and a
+/// brief fade-out exit.
 ///
 /// The renderer produces an `AVMutableComposition` (one black-background
 /// video track, exactly `OutroRenderer.duration` long) plus the matching
@@ -19,6 +19,8 @@ import UIKit
 /// gets a 1280x720 outro — the outro never re-encodes to a different size
 /// than the clip it sits next to.
 enum OutroRenderer {
+
+    static let tagline = "Cut with ReelClip"
 
     /// Total outro length. Three seconds keeps the brand mark readable without
     /// adding a long tail to short-form exports.
@@ -240,9 +242,9 @@ enum OutroRenderer {
 
     // MARK: - Overlay layer
 
-    /// Build the centred icon-mark layer and attach the animation timeline.
-    /// The mark fades and scales in over 0.4 seconds, holds, then fades out
-    /// over the final 0.3 seconds.
+    /// Build the centred icon-mark and caption layers and attach the animation
+    /// timeline. The mark and caption fade in over 0.4 seconds, then the
+    /// combined stack fades out over the final 0.3 seconds.
     static func makeOverlayLayer(
         for renderSize: CGSize,
         contentsScale: CGFloat,
@@ -266,6 +268,22 @@ enum OutroRenderer {
 
         group.addSublayer(logoLayer)
 
+        let taglineLayer = CATextLayer()
+        let taglineFont = UIFont.systemFont(
+            ofSize: taglineFontSize(in: renderSize),
+            weight: .semibold
+        )
+        taglineLayer.frame = taglineFrame(in: renderSize, markFrame: logoLayer.frame)
+        taglineLayer.string = tagline
+        taglineLayer.font = taglineFont
+        taglineLayer.fontSize = taglineFont.pointSize
+        taglineLayer.foregroundColor = UIColor(white: 0.94, alpha: 1).cgColor
+        taglineLayer.alignmentMode = .center
+        taglineLayer.truncationMode = .end
+        taglineLayer.contentsScale = contentsScale
+        taglineLayer.opacity = 0
+        group.addSublayer(taglineLayer)
+
         addOpacityAnimation(
             to: logoLayer,
             from: 0, to: 1,
@@ -274,6 +292,11 @@ enum OutroRenderer {
         addScaleAnimation(
             to: logoLayer,
             from: 0.72, to: 1.0,
+            startSeconds: overlayOffset, durationSeconds: 0.4
+        )
+        addOpacityAnimation(
+            to: taglineLayer,
+            from: 0, to: 1,
             startSeconds: overlayOffset, durationSeconds: 0.4
         )
         addOpacityAnimation(
@@ -293,7 +316,8 @@ enum OutroRenderer {
             imageSize.height > 0
         else { return .zero }
 
-        let maximumDimension = min(renderSize.width, renderSize.height) * 0.34
+        let shortestDimension = min(renderSize.width, renderSize.height)
+        let maximumDimension = shortestDimension * 0.30
         let aspectRatio = imageSize.width / imageSize.height
         let markSize: CGSize
         if aspectRatio <= 1 {
@@ -302,12 +326,42 @@ enum OutroRenderer {
             markSize = CGSize(width: maximumDimension, height: maximumDimension / aspectRatio)
         }
 
+        // Centre the mark + caption together, rather than centring only the
+        // mark and then adding text below it. This keeps the brand lockup
+        // balanced in both portrait and landscape exports.
+        let combinedHeight = markSize.height
+            + taglineSpacing(in: renderSize)
+            + taglineHeight(in: renderSize)
         return CGRect(
             x: (renderSize.width - markSize.width) / 2,
-            y: (renderSize.height - markSize.height) / 2,
+            y: (renderSize.height - combinedHeight) / 2,
             width: markSize.width,
             height: markSize.height
         )
+    }
+
+    static func taglineFrame(in renderSize: CGSize, markFrame: CGRect) -> CGRect {
+        guard renderSize.width > 0, renderSize.height > 0 else { return .zero }
+        let horizontalInset = max(renderSize.width * 0.07, 24)
+        return CGRect(
+            x: horizontalInset,
+            y: markFrame.maxY + taglineSpacing(in: renderSize),
+            width: max(renderSize.width - horizontalInset * 2, 0),
+            height: taglineHeight(in: renderSize)
+        )
+    }
+
+    private static func taglineFontSize(in renderSize: CGSize) -> CGFloat {
+        let shortestDimension = min(renderSize.width, renderSize.height)
+        return min(max(shortestDimension * 0.055, 22), 58)
+    }
+
+    private static func taglineHeight(in renderSize: CGSize) -> CGFloat {
+        ceil(taglineFontSize(in: renderSize) * 1.28)
+    }
+
+    private static func taglineSpacing(in renderSize: CGSize) -> CGFloat {
+        min(max(min(renderSize.width, renderSize.height) * 0.024, 12), 28)
     }
 
     private static func addOpacityAnimation(
